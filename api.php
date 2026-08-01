@@ -324,6 +324,8 @@ try {
             $update_log = param('update_log', '');
             $update_mode = param('update_mode', 'internal'); // internal=内置浏览器, external=外置浏览器
             $force_update = (int)param('force_update', 0); // 1=强制更新
+            $size_mb = (float)param('size_mb', 0); // APK 大小 (MB)
+            $release_date = param('release_date', date('Y-m-d')); // 发布日期
             if (!$version) json_error('版本号不能为空');
             $cfg = json_encode([
                 'version' => $version,
@@ -331,6 +333,8 @@ try {
                 'update_log' => $update_log,
                 'update_mode' => $update_mode,
                 'force_update' => $force_update,
+                'size_mb' => $size_mb,
+                'release_date' => $release_date,
             ], JSON_UNESCAPED_UNICODE);
             db()->prepare("INSERT INTO settings (`key`, `value`) VALUES ('latest_version', ?)
                            ON DUPLICATE KEY UPDATE `value` = ?")->execute([$cfg, $cfg]);
@@ -386,6 +390,8 @@ try {
                 $update_log = $cfg['update_log'] ?? '';
                 $update_mode = $cfg['update_mode'] ?? 'internal';
                 $force_update = (int)($cfg['force_update'] ?? 0);
+                $size_mb = (float)($cfg['size_mb'] ?? 0);
+                $release_date = $cfg['release_date'] ?? '';
             }
             json_out([
                 'version' => $version,
@@ -393,6 +399,8 @@ try {
                 'update_log' => $update_log,
                 'update_mode' => $update_mode,
                 'force_update' => $force_update,
+                'size_mb' => $size_mb,
+                'release_date' => $release_date,
             ], 0, 'ok', 600);
 
         default:

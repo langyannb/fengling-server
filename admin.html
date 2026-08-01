@@ -153,6 +153,10 @@ button { cursor: pointer; border: none; border-radius: var(--radius-sm); font-si
           </select>
         </div>
       </div>
+      <div class="form-row">
+        <div class="form-group"><label>APK 大小 (MB)</label><input v-model="verForm.size_mb" type="number" step="0.1" placeholder="12.5"></div>
+        <div class="form-group"><label>发布日期</label><input v-model="verForm.release_date" type="date"></div>
+      </div>
       <div class="modal-btns">
         <button class="btn-primary" @click="saveVersion">发布版本</button>
         <button class="btn-ghost" @click="loadVersion">重置</button>
@@ -395,7 +399,7 @@ createApp({
       appForm: { id: 0, name: '', category_id: 0, icon: '', version: '', description: '', package_name: '', sort_order: 0, is_active: 1, pack_id: null, is_top: 0, is_featured: 0, links: [] },
       bannerForm: { id: 0, image: '', title: '', app_id: null, url: '', sort_order: 0, is_active: 1 },
       catForm: { id: 0, name: '', color: '#4C6FFF', sort_order: 0 },
-      verForm: { version: '1.0.0', url: '', update_log: '', update_mode: 'internal', force_update: 0 },
+      verForm: { version: '1.0.0', url: '', update_log: '', update_mode: 'internal', force_update: 0, size_mb: 0, release_date: '' },
       aboutForm: { qq_group: '', qq_key: '', qq_url: '', website: '', github: '', feedback: '', donate: '', banner_text: '风铃分享库 · 官方频道', banner_sub: '最新软件 · 更新通知 · 交流反馈' },
     };
   },
@@ -466,7 +470,7 @@ createApp({
       try {
         const r = await fetch('api.php?action=version').then(x => x.json());
         if (r.code === 0 && r.data) {
-          this.verForm = { version: r.data.version || '1.0.0', url: r.data.url || '', update_log: r.data.update_log || '', update_mode: r.data.update_mode || 'internal', force_update: Number(r.data.force_update) || 0 };
+          this.verForm = { version: r.data.version || '1.0.0', url: r.data.url || '', update_log: r.data.update_log || '', update_mode: r.data.update_mode || 'internal', force_update: Number(r.data.force_update) || 0, size_mb: Number(r.data.size_mb) || 0, release_date: r.data.release_date || '' };
         }
       } catch (e) { this.toast('版本信息加载失败'); }
     },
@@ -502,7 +506,7 @@ createApp({
       const f = this.verForm;
       if (!f.version) { this.toast('请输入版本号'); return; }
       if (!f.url) { this.toast('请上传 APK 或填写外链下载地址'); return; }
-      const r = await this.api('version_update', { version: f.version, url: f.url, update_log: f.update_log, update_mode: f.update_mode || 'internal', force_update: Number(f.force_update) || 0 }, 'POST');
+      const r = await this.api('version_update', { version: f.version, url: f.url, update_log: f.update_log, update_mode: f.update_mode || 'internal', force_update: Number(f.force_update) || 0, size_mb: Number(f.size_mb) || 0, release_date: f.release_date || '' }, 'POST');
       if (r.code !== 0) {
         if (r.code !== 401) this.toast('发布失败: ' + (r.msg || '未知错误'));
         return;
