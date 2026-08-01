@@ -53,9 +53,10 @@ try {
             $name = param('name', '');
             if (!$name) json_error('分类名不能为空');
             $color = param('color', '#4C6FFF');
+            $icon = param('icon', ''); // 分类图标 (上传图片 URL)
             $sort = (int)param('sort_order', 0);
-            db()->prepare('INSERT INTO categories (name, color, sort_order) VALUES (?, ?, ?)')
-                ->execute([$name, $color, $sort]);
+            db()->prepare('INSERT INTO categories (name, color, icon, sort_order) VALUES (?, ?, ?, ?)')
+                ->execute([$name, $color, $icon, $sort]);
             json_out(['id' => (int)db()->lastInsertId()]);
 
         case 'category_update':
@@ -63,11 +64,13 @@ try {
             $id = (int)param('id', 0);
             $name = param('name');
             $color = param('color');
+            $icon = param('icon');
             $sort = param('sort_order');
             $sql = 'UPDATE categories SET ';
             $args = [];
             if ($name !== null) { $sql .= 'name = ?, '; $args[] = $name; }
             if ($color !== null) { $sql .= 'color = ?, '; $args[] = $color; }
+            if ($icon !== null) { $sql .= 'icon = ?, '; $args[] = $icon; }
             if ($sort !== null) { $sql .= 'sort_order = ?, '; $args[] = (int)$sort; }
             if (!$args) json_error('没有要更新的字段');
             $sql = rtrim($sql, ', ') . ' WHERE id = ?';

@@ -359,6 +359,13 @@ button { cursor: pointer; border: none; border-radius: var(--radius-sm); font-si
       <div class="modal">
         <h3>{{catForm.id ? '编辑分类' : '添加分类'}}</h3>
         <div class="form-group"><label>名称 *</label><input v-model="catForm.name" placeholder="分类名"></div>
+        <div class="form-group"><label>图标 (点击上传)</label>
+          <div class="upload-box" @click="pickImage('catIcon')">
+            <template v-if="!catForm.icon"><span style="font-size:24px;">+</span><span>上传分类图标</span></template>
+            <template v-else><img :src="catForm.icon" alt="icon"><div class="up-tip">点击更换</div></template>
+            <div v-if="uploading==='catIcon'" class="up-tip">上传中...</div>
+          </div>
+        </div>
         <div class="form-group"><label>颜色</label>
           <div style="display:flex;gap:8px;flex-wrap:wrap;">
             <div v-for="c in colors" :key="c" @click="catForm.color=c" :style="{width:'32px',height:'32px',borderRadius:'10px',background:c,cursor:'pointer',outline: catForm.color===c?'2px solid #333':'none',outlineOffset:'2px'}"></div>
@@ -398,7 +405,7 @@ createApp({
       colors: ['#4C6FFF', '#22B07D', '#FF8F1F', '#FF4D6D', '#7C4DFF', '#00B8D4', '#FFB300', '#F5455C'],
       appForm: { id: 0, name: '', category_id: 0, icon: '', version: '', description: '', package_name: '', sort_order: 0, is_active: 1, pack_id: null, is_top: 0, is_featured: 0, links: [] },
       bannerForm: { id: 0, image: '', title: '', app_id: null, url: '', sort_order: 0, is_active: 1 },
-      catForm: { id: 0, name: '', color: '#4C6FFF', sort_order: 0 },
+      catForm: { id: 0, name: '', color: '#4C6FFF', icon: '', sort_order: 0 },
       verForm: { version: '1.0.0', url: '', update_log: '', update_mode: 'internal', force_update: 0, size_mb: 0, release_date: '' },
       aboutForm: { qq_group: '', qq_key: '', qq_url: '', website: '', github: '', feedback: '', donate: '', banner_text: '风铃分享库 · 官方频道', banner_sub: '最新软件 · 更新通知 · 交流反馈' },
     };
@@ -554,6 +561,7 @@ createApp({
           if (r.code === 0) {
             if (target === 'icon') this.appForm.icon = r.data.url;
             else if (target === 'banner') this.bannerForm.image = r.data.url;
+            else if (target === 'catIcon') this.catForm.icon = r.data.url;
             this.toast('上传成功');
           } else this.toast(r.msg);
         } catch (err) { this.toast('上传失败'); }
@@ -680,7 +688,7 @@ createApp({
     },
     // 分类
     editCat(c) {
-      this.catForm = c ? { ...c } : { id: 0, name: '', color: '#4C6FFF', sort_order: 0 };
+      this.catForm = c ? { ...c } : { id: 0, name: '', color: '#4C6FFF', icon: '', sort_order: 0 };
       this.showCat = true;
     },
     async saveCat() {
@@ -688,9 +696,9 @@ createApp({
       if (!f.name) { this.toast('请输入分类名'); return; }
       let r;
       if (f.id) {
-        r = await this.api('category_update', { id: f.id, name: f.name, color: f.color, sort_order: Number(f.sort_order) || 0 }, 'POST');
+        r = await this.api('category_update', { id: f.id, name: f.name, color: f.color, icon: f.icon || '', sort_order: Number(f.sort_order) || 0 }, 'POST');
       } else {
-        r = await this.api('category_create', { name: f.name, color: f.color, sort_order: Number(f.sort_order) || 0 }, 'POST');
+        r = await this.api('category_create', { name: f.name, color: f.color, icon: f.icon || '', sort_order: Number(f.sort_order) || 0 }, 'POST');
       }
       if (r.code !== 0) {
         if (r.code !== 401) this.toast('保存失败: ' + (r.msg || '未知错误'));
