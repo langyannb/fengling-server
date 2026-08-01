@@ -198,6 +198,25 @@ try {
                 'top_links' => $topLinks,
             ]);
 
+        case 'version':
+            // 版本检测 (公开): 返回最新版本信息
+            // 版本配置存 apps 表特殊记录或单独配置; 当前硬编码, 后续可加版本管理表
+            $version = '1.0.0';
+            $url = '';
+            $update_log = '';
+            $row = db()->query("SELECT * FROM settings WHERE `key` = 'latest_version'")->fetch(PDO::FETCH_ASSOC);
+            if ($row) {
+                $cfg = json_decode($row['value'], true);
+                $version = $cfg['version'] ?? $version;
+                $url = $cfg['url'] ?? '';
+                $update_log = $cfg['update_log'] ?? '';
+            }
+            json_out([
+                'version' => $version,
+                'url' => $url,
+                'update_log' => $update_log,
+            ]);
+
         default:
             json_error('未知操作: ' . $action, 404);
     }

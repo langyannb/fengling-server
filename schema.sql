@@ -67,3 +67,15 @@ CREATE TABLE IF NOT EXISTS `clicks` (
 -- 默认管理员 (密码 REDACTED_DB_PASS 的 bcrypt 哈希, 由服务器 PHP password_hash 生成)
 INSERT IGNORE INTO `users` (`username`, `password`, `nickname`, `role`) VALUES
 ('zjyzjy', '$2y$12$p/cJv53Q6/AN4qePRcxy9u.zxAmYA61MC3AQqqLQApsXNS4EyLK2m', '风铃管理员', 'admin');
+
+-- 设置表 (版本检测等配置)
+CREATE TABLE IF NOT EXISTS `settings` (
+  `id` INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  `key` VARCHAR(64) NOT NULL UNIQUE,
+  `value` TEXT,
+  `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
+
+-- 默认版本配置 (后续通过管理端更新)
+INSERT IGNORE INTO `settings` (`key`, `value`) VALUES
+('latest_version', '{"version":"1.0.0","url":"","update_log":""}');
