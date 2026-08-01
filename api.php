@@ -336,6 +336,41 @@ try {
                            ON DUPLICATE KEY UPDATE `value` = ?")->execute([$cfg, $cfg]);
             json_out(null);
 
+        // ============ 关于页配置 (官方频道等) ============
+        case 'about_config_get':
+            // 公开: 返回关于页配置 (官方频道/链接)
+            $row = db()->query("SELECT * FROM settings WHERE `key` = 'about_config'")->fetch(PDO::FETCH_ASSOC);
+            $cfg = $row ? json_decode($row['value'], true) : [];
+            $defaults = [
+                'qq_group' => '',      // QQ 群号
+                'qq_key' => '',        // qq 加群 key (mqqapi 用)
+                'qq_url' => '',        // 加群网页链接
+                'website' => '',       // 官网
+                'github' => '',        // GitHub
+                'feedback' => '',      // 反馈
+                'donate' => '',        // 捐赠
+                'banner_text' => '风铃分享库 · 官方频道',
+                'banner_sub' => '最新软件 · 更新通知 · 交流反馈',
+            ];
+            json_out(array_merge($defaults, $cfg), 0, 'ok', 600);
+
+        case 'about_config_set':
+            require_admin();
+            $cfg = json_encode([
+                'qq_group' => param('qq_group', ''),
+                'qq_key' => param('qq_key', ''),
+                'qq_url' => param('qq_url', ''),
+                'website' => param('website', ''),
+                'github' => param('github', ''),
+                'feedback' => param('feedback', ''),
+                'donate' => param('donate', ''),
+                'banner_text' => param('banner_text', ''),
+                'banner_sub' => param('banner_sub', ''),
+            ], JSON_UNESCAPED_UNICODE);
+            db()->prepare("INSERT INTO settings (`key`, `value`) VALUES ('about_config', ?)
+                           ON DUPLICATE KEY UPDATE `value` = ?")->execute([$cfg, $cfg]);
+            json_out(null);
+
         case 'version':
             // 版本检测 (公开): 返回最新版本信息
             // 版本配置存 settings 表 latest_version

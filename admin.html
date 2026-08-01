@@ -123,6 +123,7 @@ button { cursor: pointer; border: none; border-radius: var(--radius-sm); font-si
       <button class="tab" :class="{active: tab==='banners'}" @click="switchTab('banners')">轮播</button>
       <button class="tab" :class="{active: tab==='cats'}" @click="switchTab('cats')">分类</button>
       <button class="tab" :class="{active: tab==='version'}" @click="switchTab('version')">发布</button>
+      <button class="tab" :class="{active: tab==='about'}" @click="switchTab('about')">关于</button>
     </div>
 
     <!-- 版本发布 -->
@@ -155,6 +156,24 @@ button { cursor: pointer; border: none; border-radius: var(--radius-sm); font-si
       <div class="modal-btns">
         <button class="btn-primary" @click="saveVersion">发布版本</button>
         <button class="btn-ghost" @click="loadVersion">重置</button>
+      </div>
+    </div>
+
+    <!-- 关于配置 -->
+    <div v-if="tab==='about'" class="section">
+      <div class="section-head"><h2>关于页配置 (官方频道)</h2></div>
+      <div class="form-group"><label>横幅标题</label><input v-model="aboutForm.banner_text" placeholder="风铃分享库 · 官方频道"></div>
+      <div class="form-group"><label>横幅副标题</label><input v-model="aboutForm.banner_sub" placeholder="最新软件 · 更新通知 · 交流反馈"></div>
+      <div class="form-group"><label>QQ 群号</label><input v-model="aboutForm.qq_group" placeholder="740266099"></div>
+      <div class="form-group"><label>QQ 加群 Key (mqqapi 用)</label><input v-model="aboutForm.qq_key" placeholder="可选"></div>
+      <div class="form-group"><label>QQ 加群网页链接</label><input v-model="aboutForm.qq_url" placeholder="http://qm.qq.com/cgi-bin/qm/qr?..."></div>
+      <div class="form-group"><label>官网链接</label><input v-model="aboutForm.website" placeholder="https://..."></div>
+      <div class="form-group"><label>GitHub 链接</label><input v-model="aboutForm.github" placeholder="https://github.com/..."></div>
+      <div class="form-group"><label>反馈链接</label><input v-model="aboutForm.feedback" placeholder="https://..."></div>
+      <div class="form-group"><label>捐赠链接</label><input v-model="aboutForm.donate" placeholder="https://..."></div>
+      <div class="modal-btns">
+        <button class="btn-primary" @click="saveAbout">保存配置</button>
+        <button class="btn-ghost" @click="loadAbout">重置</button>
       </div>
     </div>
 
@@ -377,6 +396,7 @@ createApp({
       bannerForm: { id: 0, image: '', title: '', app_id: null, url: '', sort_order: 0, is_active: 1 },
       catForm: { id: 0, name: '', color: '#4C6FFF', sort_order: 0 },
       verForm: { version: '1.0.0', url: '', update_log: '', update_mode: 'internal', force_update: 0 },
+      aboutForm: { qq_group: '', qq_key: '', qq_url: '', website: '', github: '', feedback: '', donate: '', banner_text: '风铃分享库 · 官方频道', banner_sub: '最新软件 · 更新通知 · 交流反馈' },
     };
   },
   mounted() {
@@ -423,6 +443,24 @@ createApp({
       if (t === 'banners') this.loadBanners();
       if (t === 'cats') this.loadCats();
       if (t === 'version') this.loadVersion();
+      if (t === 'about') this.loadAbout();
+    },
+    async loadAbout() {
+      try {
+        const r = await fetch('api.php?action=about_config_get').then(x => x.json());
+        if (r.code === 0 && r.data) {
+          this.aboutForm = { ...this.aboutForm, ...r.data };
+        }
+      } catch (e) { this.toast('关于配置加载失败'); }
+    },
+    async saveAbout() {
+      const f = this.aboutForm;
+      const r = await this.api('about_config_set', { qq_group: f.qq_group, qq_key: f.qq_key, qq_url: f.qq_url, website: f.website, github: f.github, feedback: f.feedback, donate: f.donate, banner_text: f.banner_text, banner_sub: f.banner_sub }, 'POST');
+      if (r.code !== 0) {
+        if (r.code !== 401) this.toast('保存失败: ' + (r.msg || '未知错误'));
+        return;
+      }
+      this.toast('关于配置已保存');
     },
     async loadVersion() {
       try {
