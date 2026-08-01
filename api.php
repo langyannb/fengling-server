@@ -232,15 +232,18 @@ try {
             if (empty($_FILES['file'])) json_error('未收到文件');
             $file = $_FILES['file'];
             $ext = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
-            $allowed = ['jpg', 'jpeg', 'png', 'gif', 'webp'];
-            if (!in_array($ext, $allowed)) json_error('仅支持图片: ' . implode('/', $allowed));
-            if ($file['size'] > 10 * 1024 * 1024) json_error('图片不能超过 10MB');
+            // type=apk 允许 APK (版本发布), 否则仅图片
+            $isApk = param('type', '') === 'apk';
+            $allowed = $isApk ? ['apk'] : ['jpg', 'jpeg', 'png', 'gif', 'webp'];
+            if (!in_array($ext, $allowed)) json_error('不支持的文件类型: ' . $ext);
+            $maxSize = $isApk ? 200 * 1024 * 1024 : 10 * 1024 * 1024;
+            if ($file['size'] > $maxSize) json_error('文件不能超过 ' . ($isApk ? '200MB' : '10MB'));
             $filename = date('YmdHis') . '_' . bin2hex(random_bytes(4)) . '.' . $ext;
             $uploadDir = __DIR__ . '/uploads/';
             if (!is_dir($uploadDir)) mkdir($uploadDir, 0755, true);
             if (!move_uploaded_file($file['tmp_name'], $uploadDir . $filename)) json_error('保存失败');
             $url = 'http://' . ($_SERVER['HTTP_HOST'] ?? 'REDACTED_SERVER_HOST:9845') . '/uploads/' . $filename;
-            json_out(['url' => $url]);
+            json_out(['url' => $url, 'filename' => $filename, 'size' => $file['size']]);
 
         // ============ 轮播图 ============
         case 'banners':
@@ -296,23 +299,56 @@ try {
                 'top_links' => $topLinks,
             ]);
 
+        // ============ APK 上传 + 版本发布 (管理) ============
+        case 'upload_apk':
+            require_admin();
+            if (empty($_FILES['file'])) json_error('未收到文件');
+            $file = $_FILES['file'];
+            if ($file['error'] !== UPLOAD_ERR_OK) json_error('上传错误: ' . $file['error']);
+            $size = $file['size'];
+            if ($size <= 0 || $size > 200 * 1024 * 1024) json_error('文件大小无效 (最大 200MB)');
+            $ext = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
+            if ($ext !== 'apk') json_error('仅支持 .apk 文件');
+            $dir = __DIR__ . '/uploads/apk';
+            if (!is_dir($dir)) @mkdir($dir, 0755, true);
+            $name = 'fengling_' . date('Ymd_His') . '.apk';
+            $dest = $dir . '/' . $name;
+            if (!move_uploaded_file($file['tmp_name'], $dest)) json_error('文件保存失败');
+            $base = 'http://' . ($_SERVER['HTTP_HOST'] ?? 'REDACTED_SERVER_HOST:9845');
+            json_out(['url' => $base . '/uploads/apk/' . $name, 'size' => $size]);
+
+        case 'version_update':
+            require_admin();
+            $version = param('version', '');
+            $url = param('url', '');
+            $update_log = param('update_log', '');
+            $update_mode = param('update_mode', 'internal'); // internal=内置浏览器, external=外置浏览器
+            if (!$version) json_error('版本号不能为空');
+            $cfg = json_encode(['version' => $version, 'url' => $url, 'update_log' => $update_log, 'update_mode' => $update_mode], JSON_UNESCAPED_UNICODE);
+            db()->prepare("INSERT INTO settings (`key`, `value`) VALUES ('latest_version', ?)
+                           ON DUPLICATE KEY UPDATE `value` = ?")->execute([$cfg, $cfg]);
+            json_out(null);
+
         case 'version':
             // 版本检测 (公开): 返回最新版本信息
-            // 版本配置存 apps 表特殊记录或单独配置; 当前硬编码, 后续可加版本管理表
+            // 版本配置存 settings 表 latest_version
             $version = '1.0.0';
             $url = '';
             $update_log = '';
+            $update_mode = 'internal';
             $row = db()->query("SELECT * FROM settings WHERE `key` = 'latest_version'")->fetch(PDO::FETCH_ASSOC);
             if ($row) {
                 $cfg = json_decode($row['value'], true);
                 $version = $cfg['version'] ?? $version;
                 $url = $cfg['url'] ?? '';
                 $update_log = $cfg['update_log'] ?? '';
+                $update_mode = $cfg['update_mode'] ?? 'internal';
             }
             json_out([
                 'version' => $version,
                 'url' => $url,
                 'update_log' => $update_log,
+                'update_mode' => $update_mode,
             ], 0, 'ok', 600);
 
         default:

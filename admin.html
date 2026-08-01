@@ -122,6 +122,31 @@ button { cursor: pointer; border: none; border-radius: var(--radius-sm); font-si
       <button class="tab" :class="{active: tab==='apps'}" @click="switchTab('apps')">软件</button>
       <button class="tab" :class="{active: tab==='banners'}" @click="switchTab('banners')">轮播</button>
       <button class="tab" :class="{active: tab==='cats'}" @click="switchTab('cats')">分类</button>
+      <button class="tab" :class="{active: tab==='version'}" @click="switchTab('version')">发布</button>
+    </div>
+
+    <!-- 版本发布 -->
+    <div v-if="tab==='version'" class="section">
+      <div class="section-head"><h2>版本发布</h2></div>
+      <div class="form-group"><label>当前版本</label><input v-model="verForm.version" placeholder="1.0.1"></div>
+      <div class="form-group"><label>APK 文件 (直接上传)</label>
+        <div class="upload-box" @click="pickApk">
+          <template v-if="!verForm.url"><span style="font-size:24px;">+</span><span>上传 APK</span></template>
+          <template v-else><span style="font-size:20px;">✅</span><span style="word-break:break-all;">{{verForm.url}}</span></template>
+          <div v-if="uploading==='apk'" class="up-tip">上传中...</div>
+        </div>
+      </div>
+      <div class="form-group"><label>更新日志</label><textarea v-model="verForm.update_log" rows="4" placeholder="更新内容，每行一条"></textarea></div>
+      <div class="form-group"><label>更新方式</label>
+        <select v-model="verForm.update_mode">
+          <option value="internal">内置更新 (App 内置浏览器)</option>
+          <option value="external">外置更新 (系统浏览器)</option>
+        </select>
+      </div>
+      <div class="modal-btns">
+        <button class="btn-primary" @click="saveVersion">发布版本</button>
+        <button class="btn-ghost" @click="loadVersion">重置</button>
+      </div>
     </div>
 
     <!-- 统计 -->
@@ -342,6 +367,7 @@ createApp({
       appForm: { id: 0, name: '', category_id: 0, icon: '', version: '', description: '', package_name: '', sort_order: 0, is_active: 1, pack_id: null, is_top: 0, is_featured: 0, links: [] },
       bannerForm: { id: 0, image: '', title: '', app_id: null, url: '', sort_order: 0, is_active: 1 },
       catForm: { id: 0, name: '', color: '#4C6FFF', sort_order: 0 },
+      verForm: { version: '1.0.0', url: '', update_log: '', update_mode: 'internal' },
     };
   },
   mounted() {
@@ -387,6 +413,54 @@ createApp({
       if (t === 'apps') this.loadApps();
       if (t === 'banners') this.loadBanners();
       if (t === 'cats') this.loadCats();
+      if (t === 'version') this.loadVersion();
+    },
+    async loadVersion() {
+      try {
+        const r = await fetch('api.php?action=version').then(x => x.json());
+        if (r.code === 0 && r.data) {
+          this.verForm = { version: r.data.version || '1.0.0', url: r.data.url || '', update_log: r.data.update_log || '', update_mode: r.data.update_mode || 'internal' };
+        }
+      } catch (e) { this.toast('版本信息加载失败'); }
+    },
+    // APK 上传
+    pickApk() {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = '.apk';
+      input.onchange = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        if (file.size > 200 * 1024 * 1024) { this.toast('APK 超过 200MB'); return; }
+        this.uploading = 'apk';
+        const fd = new FormData();
+        fd.append('file', file);
+        try {
+          const res = await fetch('api.php?action=upload_apk', {
+            method: 'POST',
+            headers: { 'Authorization': 'Bearer ' + this.token },
+            body: fd,
+          });
+          const r = await res.json();
+          if (r.code === 0 && r.data) {
+            this.verForm.url = r.data.url;
+            this.toast('APK 上传成功');
+          } else if (r.code !== 401) this.toast(r.msg || '上传失败');
+        } catch (err) { this.toast('上传失败'); }
+        this.uploading = '';
+      };
+      input.click();
+    },
+    async saveVersion() {
+      const f = this.verForm;
+      if (!f.version) { this.toast('请输入版本号'); return; }
+      if (!f.url) { this.toast('请先上传 APK'); return; }
+      const r = await this.api('version_update', { version: f.version, url: f.url, update_log: f.update_log, update_mode: f.update_mode || 'internal' }, 'POST');
+      if (r.code !== 0) {
+        if (r.code !== 401) this.toast('发布失败: ' + (r.msg || '未知错误'));
+        return;
+      }
+      this.toast('版本发布成功: v' + f.version);
     },
     async login() {
       this.loginErr = '';
