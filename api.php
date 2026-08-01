@@ -327,8 +327,17 @@ try {
             $update_log = param('update_log', '');
             $update_mode = param('update_mode', 'internal'); // internal=内置浏览器, external=外置浏览器
             $force_update = (int)param('force_update', 0); // 1=强制更新
-            $size_mb = (float)param('size_mb', 0); // APK 大小 (MB)
-            $release_date = param('release_date', date('Y-m-d')); // 发布日期
+            // APK 大小: 未填时自动从上传文件计算
+            $size_mb = (float)param('size_mb', 0);
+            if ($size_mb <= 0 && $url && strpos($url, '/uploads/apk/') !== false) {
+                $filePath = __DIR__ . parse_url($url, PHP_URL_PATH);
+                if (file_exists($filePath)) {
+                    $size_mb = round(filesize($filePath) / 1048576, 1);
+                }
+            }
+            // 发布日期: 未填时默认当天
+            $release_date = param('release_date', date('Y-m-d'));
+            if (!$release_date) $release_date = date('Y-m-d');
             if (!$version) json_error('版本号不能为空');
             $cfg = json_encode([
                 'version' => $version,
