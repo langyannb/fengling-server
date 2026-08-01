@@ -429,18 +429,38 @@ createApp({
       input.click();
     },
     // 软件
-    openApp(app) {
-      if (app) {
-        this.appForm = {
-          ...app,
-          category_id: Number(app.category_id) || 0,
-          pack_id: app.pack_id || null,
-          links: (app.pan_links || []).map(l => ({ ...l, _k: 'l' + l.id + Math.random(), _editing: false })),
-        };
-      } else {
-        this.appForm = { id: 0, name: '', category_id: 0, icon: '', version: '', description: '', package_name: '', sort_order: 0, is_active: 1, pack_id: null, links: [] };
-      }
+    async openApp(app) {
+      this.appForm = {
+        id: app ? app.id : 0, name: app ? app.name : '', category_id: app ? (Number(app.category_id) || 0) : 0,
+        icon: app ? app.icon : '', version: app ? app.version : '', description: app ? app.description : '',
+        package_name: app ? app.package_name : '', sort_order: app ? app.sort_order : 0,
+        is_active: app ? Number(app.is_active) : 1, pack_id: app ? (app.pack_id || null) : null,
+        links: [],
+      };
       this.showApp = true;
+      // 编辑已有软件: 异步加载详情(含网盘链接), 否则编辑时链接不可见
+      if (app && app.id) {
+        try {
+          const r = await fetch('api.php?action=app_detail&id=' + app.id).then(x => x.json());
+          if (r.code === 0 && r.data) {
+            const d = r.data;
+            this.appForm = {
+              ...this.appForm,
+              name: d.name || this.appForm.name,
+              icon: d.icon || this.appForm.icon,
+              version: d.version || this.appForm.version,
+              description: d.description || this.appForm.description,
+              package_name: d.package_name || this.appForm.package_name,
+              pack_id: d.pack_id || null,
+              links: (d.pan_links || []).map(l => ({ ...l, _k: 'l' + l.id + Math.random(), _editing: false })),
+            };
+            // 记录原始链接 id (用于检测保存时被删除的链接)
+            this._origLinkIds = (d.pan_links || []).map(l => l.id);
+          }
+        } catch (e) { this.toast('详情加载失败'); }
+      } else {
+        this._origLinkIds = [];
+      }
     },
     addLink() {
       this.appForm.links.push({ pan_type: 'uc', label: 'UC网盘', url: '', password: '', _new: true, _k: 'n' + Date.now() + Math.random(), _editing: true });
@@ -453,6 +473,15 @@ createApp({
         if (link.id && !link._new) {
           const r = await this.api('link_update', { id: link.id, pan_type: link.pan_type, label: link.label, url: link.url, password: link.password }, 'POST');
           if (r.code !== 0 && r.code !== 401) { this.toast('链接更新失败: ' + r.msg); return; }
+        }
+      }
+      // 删除被移除的链接 (编辑时链接在但保存前被删掉的情况)
+      if (f.id && this._origLinkIds) {
+        const keptIds = new Set(f.links.filter(l => l.id).map(l => l.id));
+        for (const oldId of this._origLinkIds) {
+          if (!keptIds.has(oldId)) {
+            await this.api('link_delete', { id: oldId }, 'POST');
+          }
         }
       }
       let r;
