@@ -1,10 +1,12 @@
 # 风铃分享库 (flfxk)
 
-软件库 + 网盘推广管理系统。PHP 原生后端 + Vue 3 移动端前端。
+软件库 + 网盘推广管理系统。PHP 原生后端 + Vue 3 移动端适配的管理后台。
+
+用户端是 Android App (com.fengling.share)，通过本系统 API 拉取软件数据；
+Web 端仅为管理后台，用于维护软件/分类/网盘推广链接和查看统计。
 
 ## 在线地址
-- 用户端: http://REDACTED_SERVER_HOST:9845/index.html
-- 管理后台: http://REDACTED_SERVER_HOST:9845/admin.html
+- 管理后台: http://REDACTED_SERVER_HOST:9845/
 - 默认管理员: zjyzjy / REDACTED_DB_PASS
 
 ## 技术栈
@@ -16,7 +18,6 @@
 ```
 ├── api.php        # API 入口 (所有接口, action 参数路由)
 ├── config.php     # 数据库配置
-├── index.html     # 用户端 (浏览软件 + 网盘下载)
 ├── admin.html     # 管理后台 (登录 + 软件/分类/链接管理 + 统计)
 └── schema.sql     # 数据库表结构 + 默认管理员
 ```
