@@ -128,20 +128,29 @@ button { cursor: pointer; border: none; border-radius: var(--radius-sm); font-si
     <!-- 版本发布 -->
     <div v-if="tab==='version'" class="section">
       <div class="section-head"><h2>版本发布</h2></div>
-      <div class="form-group"><label>当前版本</label><input v-model="verForm.version" placeholder="1.0.1"></div>
-      <div class="form-group"><label>APK 文件 (直接上传)</label>
+      <div class="form-group"><label>版本号</label><input v-model="verForm.version" placeholder="1.0.1"></div>
+      <div class="form-group"><label>APK 文件 (上传, 或下方填外链)</label>
         <div class="upload-box" @click="pickApk">
           <template v-if="!verForm.url"><span style="font-size:24px;">+</span><span>上传 APK</span></template>
           <template v-else><span style="font-size:20px;">✅</span><span style="word-break:break-all;">{{verForm.url}}</span></template>
           <div v-if="uploading==='apk'" class="up-tip">上传中...</div>
         </div>
       </div>
+      <div class="form-group"><label>外链下载地址 (不传 APK 时填, 如网盘/网页链接)</label><input v-model="verForm.url" placeholder="https://..."></div>
       <div class="form-group"><label>更新日志</label><textarea v-model="verForm.update_log" rows="4" placeholder="更新内容，每行一条"></textarea></div>
-      <div class="form-group"><label>更新方式</label>
-        <select v-model="verForm.update_mode">
-          <option value="internal">内置更新 (App 内置浏览器)</option>
-          <option value="external">外置更新 (系统浏览器)</option>
-        </select>
+      <div class="form-row">
+        <div class="form-group"><label>更新方式</label>
+          <select v-model="verForm.update_mode">
+            <option value="internal">内置更新 (App 内置浏览器)</option>
+            <option value="external">外置更新 (系统浏览器)</option>
+          </select>
+        </div>
+        <div class="form-group"><label>强制更新</label>
+          <select v-model="verForm.force_update">
+            <option :value="1">🔒 强制 (用户必须更新)</option>
+            <option :value="0">非强制 (可稍后)</option>
+          </select>
+        </div>
       </div>
       <div class="modal-btns">
         <button class="btn-primary" @click="saveVersion">发布版本</button>
@@ -367,7 +376,7 @@ createApp({
       appForm: { id: 0, name: '', category_id: 0, icon: '', version: '', description: '', package_name: '', sort_order: 0, is_active: 1, pack_id: null, is_top: 0, is_featured: 0, links: [] },
       bannerForm: { id: 0, image: '', title: '', app_id: null, url: '', sort_order: 0, is_active: 1 },
       catForm: { id: 0, name: '', color: '#4C6FFF', sort_order: 0 },
-      verForm: { version: '1.0.0', url: '', update_log: '', update_mode: 'internal' },
+      verForm: { version: '1.0.0', url: '', update_log: '', update_mode: 'internal', force_update: 0 },
     };
   },
   mounted() {
@@ -419,7 +428,7 @@ createApp({
       try {
         const r = await fetch('api.php?action=version').then(x => x.json());
         if (r.code === 0 && r.data) {
-          this.verForm = { version: r.data.version || '1.0.0', url: r.data.url || '', update_log: r.data.update_log || '', update_mode: r.data.update_mode || 'internal' };
+          this.verForm = { version: r.data.version || '1.0.0', url: r.data.url || '', update_log: r.data.update_log || '', update_mode: r.data.update_mode || 'internal', force_update: Number(r.data.force_update) || 0 };
         }
       } catch (e) { this.toast('版本信息加载失败'); }
     },
@@ -454,8 +463,8 @@ createApp({
     async saveVersion() {
       const f = this.verForm;
       if (!f.version) { this.toast('请输入版本号'); return; }
-      if (!f.url) { this.toast('请先上传 APK'); return; }
-      const r = await this.api('version_update', { version: f.version, url: f.url, update_log: f.update_log, update_mode: f.update_mode || 'internal' }, 'POST');
+      if (!f.url) { this.toast('请上传 APK 或填写外链下载地址'); return; }
+      const r = await this.api('version_update', { version: f.version, url: f.url, update_log: f.update_log, update_mode: f.update_mode || 'internal', force_update: Number(f.force_update) || 0 }, 'POST');
       if (r.code !== 0) {
         if (r.code !== 401) this.toast('发布失败: ' + (r.msg || '未知错误'));
         return;

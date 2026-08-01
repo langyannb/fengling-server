@@ -323,8 +323,15 @@ try {
             $url = param('url', '');
             $update_log = param('update_log', '');
             $update_mode = param('update_mode', 'internal'); // internal=内置浏览器, external=外置浏览器
+            $force_update = (int)param('force_update', 0); // 1=强制更新
             if (!$version) json_error('版本号不能为空');
-            $cfg = json_encode(['version' => $version, 'url' => $url, 'update_log' => $update_log, 'update_mode' => $update_mode], JSON_UNESCAPED_UNICODE);
+            $cfg = json_encode([
+                'version' => $version,
+                'url' => $url,
+                'update_log' => $update_log,
+                'update_mode' => $update_mode,
+                'force_update' => $force_update,
+            ], JSON_UNESCAPED_UNICODE);
             db()->prepare("INSERT INTO settings (`key`, `value`) VALUES ('latest_version', ?)
                            ON DUPLICATE KEY UPDATE `value` = ?")->execute([$cfg, $cfg]);
             json_out(null);
@@ -343,12 +350,14 @@ try {
                 $url = $cfg['url'] ?? '';
                 $update_log = $cfg['update_log'] ?? '';
                 $update_mode = $cfg['update_mode'] ?? 'internal';
+                $force_update = (int)($cfg['force_update'] ?? 0);
             }
             json_out([
                 'version' => $version,
                 'url' => $url,
                 'update_log' => $update_log,
                 'update_mode' => $update_mode,
+                'force_update' => $force_update,
             ], 0, 'ok', 600);
 
         default:
