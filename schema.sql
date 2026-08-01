@@ -70,11 +70,28 @@ INSERT IGNORE INTO `users` (`username`, `password`, `nickname`, `role`) VALUES
 
 -- 设置表 (版本检测等配置)
 CREATE TABLE IF NOT EXISTS `settings` (
-  `id` INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-  `key` VARCHAR(64) NOT NULL UNIQUE,
-  `value` TEXT,
-  `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-);
+    `id` INT AUTO_INCREMENT PRIMARY KEY,
+    `key` VARCHAR(64) NOT NULL UNIQUE,
+    `value` TEXT,
+    `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 轮播图
+CREATE TABLE IF NOT EXISTS `banners` (
+    `id` INT AUTO_INCREMENT PRIMARY KEY,
+    `image` VARCHAR(500) NOT NULL,
+    `title` VARCHAR(100) DEFAULT '',
+    `app_id` INT DEFAULT NULL,
+    `sort_order` INT DEFAULT 0,
+    `is_active` TINYINT DEFAULT 1,
+    `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- apps 表加整合包字段 (pack_id 指向父整合包, NULL=独立软件)
+-- 注意: MySQL 5.7 不支持 ADD COLUMN IF NOT EXISTS, 若已执行过则忽略此行
+SET @col_exists = (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='flfxk' AND TABLE_NAME='apps' AND COLUMN_NAME='pack_id');
+SET @sql = IF(@col_exists = 0, 'ALTER TABLE `apps` ADD COLUMN `pack_id` INT DEFAULT NULL AFTER `sort_order`', 'SELECT 1');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- 默认版本配置 (后续通过管理端更新)
 INSERT IGNORE INTO `settings` (`key`, `value`) VALUES

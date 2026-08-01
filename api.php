@@ -85,11 +85,19 @@ try {
         case 'apps':
             $categoryId = (int)param('category_id', 0);
             $keyword = param('keyword', '');
+            $packId = param('pack_id', null);
             $sql = 'SELECT a.*, c.name AS category_name, c.color AS category_color FROM apps a
                     LEFT JOIN categories c ON a.category_id = c.id
                     WHERE a.is_active = 1';
             $args = [];
-            if ($categoryId > 0) { $sql .= ' AND a.category_id = ?'; $args[] = $categoryId; }
+            if ($packId !== null) {
+                // 整合包子项: pack_id = 父 id
+                $sql .= ' AND a.pack_id = ?';
+                $args[] = (int)$packId ?: 0;
+            } elseif ($categoryId > 0) {
+                $sql .= ' AND a.category_id = ?';
+                $args[] = $categoryId;
+            }
             if ($keyword !== '') { $sql .= ' AND a.name LIKE ?'; $args[] = '%' . $keyword . '%'; }
             $sql .= ' ORDER BY a.sort_order ASC, a.id DESC';
             $stmt = db()->prepare($sql);
@@ -99,6 +107,7 @@ try {
                 $app['download_count'] = (int)$app['download_count'];
                 $app['rating'] = (float)$app['rating'];
                 $app['id'] = (int)$app['id'];
+                $app['pack_id'] = $app['pack_id'] ? (int)$app['pack_id'] : null;
             }
             json_out($apps, 0, 'ok', 60);
 
@@ -114,6 +123,21 @@ try {
                                        WHERE app_id = ? AND is_active = 1 ORDER BY sort_order ASC, id ASC');
             $linkStmt->execute([$id]);
             $app['pan_links'] = $linkStmt->fetchAll();
+            // 整合包子项
+            $packStmt = db()->prepare('SELECT id, name, icon, version, download_count FROM apps
+                                       WHERE pack_id = ? AND is_active = 1 ORDER BY sort_order ASC, id ASC');
+            $packStmt->execute([$id]);
+            $app['pack_items'] = $packStmt->fetchAll();
+            foreach ($app['pack_items'] as &$pi) { $pi['id'] = (int)$pi['id']; $pi['download_count'] = (int)$pi['download_count']; }
+            // 所属整合包
+            $app['pack_id'] = $app['pack_id'] ? (int)$app['pack_id'] : null;
+            if ($app['pack_id']) {
+                $pStmt = db()->prepare('SELECT id, name, icon FROM apps WHERE id = ?');
+                $pStmt->execute([$app['pack_id']]);
+                $app['parent_pack'] = $pStmt->fetch();
+            } else {
+                $app['parent_pack'] = null;
+            }
             $app['download_count'] = (int)$app['download_count'];
             $app['rating'] = (float)$app['rating'];
             $app['id'] = (int)$app['id'];
@@ -127,12 +151,15 @@ try {
         case 'app_update':
             require_admin();
             $id = (int)param('id', 0);
-            $fields = ['name', 'category_id', 'icon', 'version', 'description', 'package_name', 'rating', 'sort_order', 'is_active'];
+            $fields = ['name', 'category_id', 'icon', 'version', 'description', 'package_name', 'rating', 'sort_order', 'is_active', 'pack_id'];
             $sql = 'UPDATE apps SET ';
             $args = [];
             foreach ($fields as $f) {
                 $v = param($f);
-                if ($v !== null) { $sql .= "$f = ?, "; $args[] = $v; }
+                if ($v !== null) {
+                    if ($f === 'pack_id') { $sql .= "pack_id = ?, "; $args[] = (int)$v ?: null; }
+                    else { $sql .= "$f = ?, "; $args[] = $v; }
+                }
             }
             if (!$args) json_error('没有要更新的字段');
             $sql = rtrim($sql, ', ') . ' WHERE id = ?';
@@ -160,6 +187,22 @@ try {
                 ->execute([$appId, $panType, $label, $url, $password]);
             json_out(['id' => (int)db()->lastInsertId()]);
 
+        case 'link_update':
+            require_admin();
+            $id = (int)param('id', 0);
+            $fields = ['pan_type', 'label', 'url', 'password', 'sort_order'];
+            $sql = 'UPDATE pan_links SET ';
+            $args = [];
+            foreach ($fields as $f) {
+                $v = param($f);
+                if ($v !== null) { $sql .= "$f = ?, "; $args[] = $v; }
+            }
+            if (!$args) json_error('没有要更新的字段');
+            $sql = rtrim($sql, ', ') . ' WHERE id = ?';
+            $args[] = $id;
+            db()->prepare($sql)->execute($args);
+            json_out(null);
+
         case 'link_delete':
             require_admin();
             $id = (int)param('id', 0);
@@ -179,6 +222,58 @@ try {
             db()->prepare('UPDATE apps SET download_count = download_count + 1 WHERE id = ?')
                 ->execute([$link['app_id']]);
             json_out(['url' => $link['url'], 'password' => $link['password']]);
+
+        // ============ 图片上传 (管理) ============
+        case 'upload':
+            require_admin();
+            if (empty($_FILES['file'])) json_error('未收到文件');
+            $file = $_FILES['file'];
+            $ext = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
+            $allowed = ['jpg', 'jpeg', 'png', 'gif', 'webp'];
+            if (!in_array($ext, $allowed)) json_error('仅支持图片: ' . implode('/', $allowed));
+            if ($file['size'] > 10 * 1024 * 1024) json_error('图片不能超过 10MB');
+            $filename = date('YmdHis') . '_' . bin2hex(random_bytes(4)) . '.' . $ext;
+            $uploadDir = __DIR__ . '/uploads/';
+            if (!is_dir($uploadDir)) mkdir($uploadDir, 0755, true);
+            if (!move_uploaded_file($file['tmp_name'], $uploadDir . $filename)) json_error('保存失败');
+            $url = 'http://' . ($_SERVER['HTTP_HOST'] ?? 'REDACTED_SERVER_HOST:9845') . '/uploads/' . $filename;
+            json_out(['url' => $url]);
+
+        // ============ 轮播图 ============
+        case 'banners':
+            $rows = db()->query('SELECT b.*, a.name AS app_name FROM banners b
+                                 LEFT JOIN apps a ON b.app_id = a.id
+                                 WHERE b.is_active = 1 ORDER BY b.sort_order ASC, b.id ASC')->fetchAll();
+            foreach ($rows as &$r) { $r['id'] = (int)$r['id']; $r['app_id'] = $r['app_id'] ? (int)$r['app_id'] : null; }
+            json_out($rows, 0, 'ok', 300);
+
+        case 'banner_create':
+            require_admin();
+            db()->prepare('INSERT INTO banners (image, title, app_id, sort_order, is_active) VALUES (?, ?, ?, ?, ?)')
+                ->execute([param('image', ''), param('title', ''), (int)param('app_id', 0) ?: null, (int)param('sort_order', 0), (int)param('is_active', 1)]);
+            json_out(['id' => (int)db()->lastInsertId()]);
+
+        case 'banner_update':
+            require_admin();
+            $id = (int)param('id', 0);
+            $fields = ['image', 'title', 'app_id', 'sort_order', 'is_active'];
+            $sql = 'UPDATE banners SET ';
+            $args = [];
+            foreach ($fields as $f) {
+                $v = param($f);
+                if ($v !== null) { $sql .= "$f = ?, "; $args[] = ($f === 'app_id') ? ((int)$v ?: null) : $v; }
+            }
+            if (!$args) json_error('没有要更新的字段');
+            $sql = rtrim($sql, ', ') . ' WHERE id = ?';
+            $args[] = $id;
+            db()->prepare($sql)->execute($args);
+            json_out(null);
+
+        case 'banner_delete':
+            require_admin();
+            $id = (int)param('id', 0);
+            db()->prepare('DELETE FROM banners WHERE id = ?')->execute([$id]);
+            json_out(null);
 
         // ============ 统计 (管理) ============
         case 'stats':
@@ -247,8 +342,9 @@ function insert_app(): int
     $name = param('name', '');
     if (!$name) json_error('软件名不能为空');
     $categoryId = (int)param('category_id', 0) ?: null;
-    db()->prepare('INSERT INTO apps (category_id, name, icon, version, description, package_name, rating, sort_order)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+    $packId = (int)param('pack_id', 0) ?: null;
+    db()->prepare('INSERT INTO apps (category_id, name, icon, version, description, package_name, rating, sort_order, pack_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
         ->execute([
             $categoryId,
             $name,
@@ -258,6 +354,7 @@ function insert_app(): int
             param('package_name', ''),
             (float)param('rating', 0),
             (int)param('sort_order', 0),
+            $packId,
         ]);
     return (int)db()->lastInsertId();
 }
