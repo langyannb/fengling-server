@@ -46,7 +46,7 @@ try {
 
         // ============ 分类 (公开读, 管理写) ============
         case 'categories':
-            json_out(db()->query('SELECT * FROM categories ORDER BY sort_order ASC, id ASC')->fetchAll());
+            json_out(db()->query('SELECT * FROM categories ORDER BY sort_order ASC, id ASC')->fetchAll(), 0, 'ok', 300);
 
         case 'category_create':
             require_admin();
@@ -100,7 +100,7 @@ try {
                 $app['rating'] = (float)$app['rating'];
                 $app['id'] = (int)$app['id'];
             }
-            json_out($apps);
+            json_out($apps, 0, 'ok', 60);
 
         case 'app_detail':
             $id = (int)param('id', 0);
@@ -117,7 +117,7 @@ try {
             $app['download_count'] = (int)$app['download_count'];
             $app['rating'] = (float)$app['rating'];
             $app['id'] = (int)$app['id'];
-            json_out($app);
+            json_out($app, 0, 'ok', 60);
 
         case 'app_create':
             require_admin();
@@ -215,7 +215,7 @@ try {
                 'version' => $version,
                 'url' => $url,
                 'update_log' => $update_log,
-            ]);
+            ], 0, 'ok', 600);
 
         default:
             json_error('未知操作: ' . $action, 404);
