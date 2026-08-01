@@ -144,7 +144,7 @@ button { cursor: pointer; border: none; border-radius: var(--radius-sm); font-si
       <div v-if="!apps.length" class="empty">暂无软件，点击右下角 + 添加</div>
       <div v-for="app in apps" :key="app.id" class="list-item">
         <img v-if="app.icon" :src="app.icon" class="icon">
-        <div v-else class="icon" style="display:flex;align-items:center;justify-content:center;color:var(--primary);font-weight:700;">{{app.name[0]}}</div>
+        <div v-else class="icon" style="display:flex;align-items:center;justify-content:center;color:var(--primary);font-weight:700;">{{(app.name||'?')[0]}}</div>
         <div class="info">
           <div class="name">{{app.name}}<span v-if="app.is_pack" class="badge badge-pack">整合</span><span v-if="!app.is_active" class="badge badge-off">下架</span></div>
           <div class="meta">{{app.category_name||'未分类'}} · {{app.download_count}}下载</div>
@@ -219,7 +219,9 @@ button { cursor: pointer; border: none; border-radius: var(--radius-sm); font-si
         <div class="form-group"><label>整合包 (选择后此软件作为整合包的子项)</label>
           <select v-model="appForm.pack_id">
             <option :value="null">独立软件</option>
-            <option v-for="a in apps" :key="a.id" :value="a.id" v-if="a.id !== appForm.id && !a.pack_id">{{a.name}} (整合包)</option>
+            <template v-for="a in apps" :key="a.id">
+              <option v-if="a.id !== appForm.id && !a.pack_id" :value="a.id">{{a.name}} (整合包)</option>
+            </template>
           </select>
         </div>
 
