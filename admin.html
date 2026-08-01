@@ -4,8 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>风铃分享库 - 管理后台</title>
-<script src="https://cdn.jsdelivr.net/npm/vue@3.4.38/dist/vue.global.prod.js"></script>
+<script src="vue.global.prod.js"></script>
 <style>
+[v-cloak] { display: none !important; }
 * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 :root {
   --primary: #4C6FFF; --bg: #F5F6FA; --card: #FFF;
@@ -20,8 +21,6 @@ button { cursor: pointer; border: none; border-radius: 9px; font-size: 14px; }
 .btn-ghost { background: #F0F1F6; color: var(--text); padding: 8px 16px; }
 .btn-danger { background: rgba(245,69,92,0.1); color: var(--danger); padding: 7px 12px; font-size: 13px; }
 .btn-sm { background: rgba(76,111,255,0.1); color: var(--primary); padding: 7px 12px; font-size: 13px; }
-
-/* 登录页 */
 .login-page { min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 24px; }
 .login-logo { width: 72px; height: 72px; border-radius: 20px; background: linear-gradient(135deg, #4C6FFF, #7B5CFF); display: flex; align-items: center; justify-content: center; color: #fff; font-size: 36px; font-weight: 700; margin-bottom: 14px; }
 .login-title { font-size: 22px; font-weight: 700; margin-bottom: 6px; }
@@ -29,26 +28,17 @@ button { cursor: pointer; border: none; border-radius: 9px; font-size: 14px; }
 .login-card { width: 100%; max-width: 360px; background: var(--card); padding: 24px; border-radius: 16px; box-shadow: var(--shadow); }
 .login-card input { margin-bottom: 12px; }
 .login-err { color: var(--danger); font-size: 13px; margin-bottom: 10px; text-align: center; }
-
-/* 主布局 */
 .admin-page { padding-bottom: 90px; }
 .topbar { position: sticky; top: 0; background: var(--card); padding: 14px 16px; display: flex; align-items: center; gap: 10px; box-shadow: 0 1px 8px rgba(30,40,90,0.05); z-index: 10; }
 .topbar h1 { font-size: 18px; flex: 1; }
-.topbar .back { background: none; color: var(--text2); font-size: 14px; }
 .topbar .logout { background: none; color: var(--danger); font-size: 13px; }
-
-/* Tab */
 .tabs { display: flex; background: var(--card); border-bottom: 1px solid #EEF0F6; position: sticky; top: 52px; z-index: 9; }
 .tab { flex: 1; text-align: center; padding: 12px 0; font-size: 14px; color: var(--text2); border-bottom: 2px solid transparent; background: none; border-radius: 0; }
 .tab.active { color: var(--primary); border-bottom-color: var(--primary); font-weight: 600; }
-
-/* 统计卡片 */
 .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 14px 16px; }
 .stat-card { background: var(--card); border-radius: var(--radius); padding: 14px; box-shadow: var(--shadow); }
 .stat-num { font-size: 24px; font-weight: 700; color: var(--primary); }
 .stat-label { font-size: 12px; color: var(--text2); margin-top: 2px; }
-
-/* 列表 */
 .section { padding: 14px 16px; }
 .section-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
 .section-head h2 { font-size: 16px; }
@@ -57,8 +47,6 @@ button { cursor: pointer; border: none; border-radius: 9px; font-size: 14px; }
 .list-item .name { font-size: 15px; font-weight: 600; }
 .list-item .meta { font-size: 12px; color: var(--text2); margin-top: 3px; }
 .list-item .ops { display: flex; gap: 8px; flex-shrink: 0; }
-
-/* 表单弹层 */
 .modal-mask { position: fixed; inset: 0; background: rgba(0,0,0,0.45); z-index: 200; display: flex; align-items: flex-end; }
 .modal { width: 100%; background: var(--card); border-radius: 18px 18px 0 0; padding: 20px; max-height: 88vh; overflow-y: auto; animation: slideUp .25s ease; }
 @keyframes slideUp { from { transform: translateY(40px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
@@ -78,9 +66,13 @@ button { cursor: pointer; border: none; border-radius: 9px; font-size: 14px; }
 </style>
 </head>
 <body>
-<!-- 登录页 -->
-<div id="login" v-if="!token">
-  <div class="login-page">
+<div id="app" v-cloak></div>
+
+<!-- 应用模板 (Vue 挂载后才渲染, 未登录/未加载时页面空白) -->
+<script type="text/x-template" id="app-tpl">
+<div>
+  <!-- 登录页 -->
+  <div v-if="!token" class="login-page">
     <div class="login-logo">风</div>
     <div class="login-title">风铃分享库</div>
     <div class="login-sub">管理后台</div>
@@ -91,135 +83,136 @@ button { cursor: pointer; border: none; border-radius: 9px; font-size: 14px; }
       <button class="btn-primary" @click="login">登 录</button>
     </div>
   </div>
-</div>
 
-<!-- 管理页 -->
-<div id="admin" v-else class="admin-page">
-  <div class="topbar">
-    <h1>风铃分享库 · 管理</h1>
-    <button class="logout" @click="logout">退出</button>
-  </div>
-
-  <div class="tabs">
-    <button class="tab" :class="{active: tab==='stats'}" @click="tab='stats'; loadStats()">统计</button>
-    <button class="tab" :class="{active: tab==='apps'}" @click="tab='apps'; loadApps()">软件</button>
-    <button class="tab" :class="{active: tab==='cats'}" @click="tab='cats'; loadCats()">分类</button>
-  </div>
-
-  <!-- 统计 -->
-  <div v-if="tab==='stats'" class="stats">
-    <div class="stat-card"><div class="stat-num">{{stats.total_apps}}</div><div class="stat-label">软件总数</div></div>
-    <div class="stat-card"><div class="stat-num">{{stats.total_downloads}}</div><div class="stat-label">总下载量</div></div>
-    <div class="stat-card"><div class="stat-num">{{stats.total_clicks}}</div><div class="stat-label">总点击</div></div>
-    <div class="stat-card"><div class="stat-num">{{stats.today_clicks}}</div><div class="stat-label">今日点击</div></div>
-    <div class="section" style="grid-column: span 2;">
-      <div class="section-head"><h2>热门链接</h2></div>
-      <div v-if="!stats.top_links || !stats.top_links.length" class="empty">暂无数据</div>
-      <div v-for="l in stats.top_links" :key="l.id" class="list-item">
-        <div class="info"><div class="name">{{l.label}}</div></div>
-        <div class="meta">{{l.cnt}} 次点击</div>
-      </div>
+  <!-- 管理页 -->
+  <div v-else class="admin-page">
+    <div class="topbar">
+      <h1>风铃分享库 · 管理</h1>
+      <button class="logout" @click="logout">退出</button>
     </div>
-  </div>
 
-  <!-- 软件管理 -->
-  <div v-if="tab==='apps'" class="section">
-    <div v-if="!apps.length" class="empty">暂无软件，点击右下角 + 添加</div>
-    <div v-for="app in apps" :key="app.id" class="list-item">
-      <div class="info">
-        <div class="name">{{app.name}}</div>
-        <div class="meta">{{app.category_name||'未分类'}} · {{app.download_count}}下载 · {{app.is_active?'上架':'下架'}}</div>
-      </div>
-      <div class="ops">
-        <button class="btn-sm" @click="openApp(app)">编辑</button>
-        <button class="btn-danger" @click="delApp(app)">删</button>
-      </div>
+    <div class="tabs">
+      <button class="tab" :class="{active: tab==='stats'}" @click="tab='stats'; loadStats()">统计</button>
+      <button class="tab" :class="{active: tab==='apps'}" @click="tab='apps'; loadApps()">软件</button>
+      <button class="tab" :class="{active: tab==='cats'}" @click="tab='cats'; loadCats()">分类</button>
     </div>
-    <button class="fab" @click="openApp()">+</button>
-  </div>
 
-  <!-- 分类管理 -->
-  <div v-if="tab==='cats'" class="section">
-    <div v-if="!cats.length" class="empty">暂无分类</div>
-    <div v-for="c in cats" :key="c.id" class="list-item">
-      <div class="info"><div class="name">{{c.name}}</div></div>
-      <div class="ops">
-        <button class="btn-sm" @click="editCat(c)">编辑</button>
-        <button class="btn-danger" @click="delCat(c)">删</button>
-      </div>
-    </div>
-    <button class="fab" @click="editCat()">+</button>
-  </div>
-
-  <!-- 软件编辑弹层 -->
-  <div v-if="showApp" class="modal-mask" @click.self="showApp=false">
-    <div class="modal">
-      <h3>{{appForm.id ? '编辑软件' : '添加软件'}}</h3>
-      <div class="form-group"><label>名称 *</label><input v-model="appForm.name" placeholder="软件名"></div>
-      <div class="form-row">
-        <div class="form-group"><label>分类</label>
-          <select v-model="appForm.category_id">
-            <option :value="0">未分类</option>
-            <option v-for="c in cats" :key="c.id" :value="c.id">{{c.name}}</option>
-          </select>
-        </div>
-        <div class="form-group"><label>版本</label><input v-model="appForm.version" placeholder="1.0"></div>
-      </div>
-      <div class="form-group"><label>图标URL</label><input v-model="appForm.icon" placeholder="https://..."></div>
-      <div class="form-group"><label>包名</label><input v-model="appForm.package_name" placeholder="com.example.app"></div>
-      <div class="form-group"><label>描述</label><textarea v-model="appForm.description" rows="3" placeholder="软件介绍"></textarea></div>
-      <div class="form-row">
-        <div class="form-group"><label>排序</label><input v-model="appForm.sort_order" type="number"></div>
-        <div class="form-group"><label>状态</label>
-          <select v-model="appForm.is_active"><option :value="1">上架</option><option :value="0">下架</option></select>
+    <!-- 统计 -->
+    <div v-if="tab==='stats'" class="stats">
+      <div class="stat-card"><div class="stat-num">{{stats.total_apps}}</div><div class="stat-label">软件总数</div></div>
+      <div class="stat-card"><div class="stat-num">{{stats.total_downloads}}</div><div class="stat-label">总下载量</div></div>
+      <div class="stat-card"><div class="stat-num">{{stats.total_clicks}}</div><div class="stat-label">总点击</div></div>
+      <div class="stat-card"><div class="stat-num">{{stats.today_clicks}}</div><div class="stat-label">今日点击</div></div>
+      <div class="section" style="grid-column: span 2;">
+        <div class="section-head"><h2>热门链接</h2></div>
+        <div v-if="!stats.top_links || !stats.top_links.length" class="empty">暂无数据</div>
+        <div v-for="l in stats.top_links" :key="l.id" class="list-item">
+          <div class="info"><div class="name">{{l.label}}</div></div>
+          <div class="meta">{{l.cnt}} 次点击</div>
         </div>
       </div>
+    </div>
 
-      <h3 style="margin-top:16px;font-size:15px;">网盘推广链接</h3>
-      <div v-for="(link, i) in appForm.links" :key="i" class="link-item">
+    <!-- 软件管理 -->
+    <div v-if="tab==='apps'" class="section">
+      <div v-if="!apps.length" class="empty">暂无软件，点击右下角 + 添加</div>
+      <div v-for="app in apps" :key="app.id" class="list-item">
         <div class="info">
-          <div>{{link.label}} <span v-if="link.password">(提取码:{{link.password}})</span></div>
-          <div class="u">{{link.url}}</div>
+          <div class="name">{{app.name}}</div>
+          <div class="meta">{{app.category_name||'未分类'}} · {{app.download_count}}下载 · {{app.is_active?'上架':'下架'}}</div>
         </div>
-        <button class="btn-danger" @click="appForm.links.splice(i,1)">删</button>
+        <div class="ops">
+          <button class="btn-sm" @click="openApp(app)">编辑</button>
+          <button class="btn-danger" @click="delApp(app)">删</button>
+        </div>
       </div>
-      <button class="btn-ghost" style="width:100%;margin-bottom:8px;" @click="appForm.links.push({pan_type:'uc',label:'UC网盘',url:'',password:''})">+ 添加网盘链接</button>
-      <div v-for="(link, i) in appForm.links.filter(l=>l._editing)" :key="'e'+i" style="background:#F7F8FC;padding:10px;border-radius:10px;margin-bottom:8px;">
+      <button class="fab" @click="openApp()">+</button>
+    </div>
+
+    <!-- 分类管理 -->
+    <div v-if="tab==='cats'" class="section">
+      <div v-if="!cats.length" class="empty">暂无分类</div>
+      <div v-for="c in cats" :key="c.id" class="list-item">
+        <div class="info"><div class="name">{{c.name}}</div></div>
+        <div class="ops">
+          <button class="btn-sm" @click="editCat(c)">编辑</button>
+          <button class="btn-danger" @click="delCat(c)">删</button>
+        </div>
+      </div>
+      <button class="fab" @click="editCat()">+</button>
+    </div>
+
+    <!-- 软件编辑弹层 -->
+    <div v-if="showApp" class="modal-mask" @click.self="showApp=false">
+      <div class="modal">
+        <h3>{{appForm.id ? '编辑软件' : '添加软件'}}</h3>
+        <div class="form-group"><label>名称 *</label><input v-model="appForm.name" placeholder="软件名"></div>
         <div class="form-row">
-          <div class="form-group"><label>类型</label>
-            <select v-model="link.pan_type">
-              <option value="uc">UC网盘</option><option value="quark">夸克</option>
-              <option value="baidu">百度</option><option value="ali">阿里</option><option value="other">其他</option>
+          <div class="form-group"><label>分类</label>
+            <select v-model="appForm.category_id">
+              <option :value="0">未分类</option>
+              <option v-for="c in cats" :key="c.id" :value="c.id">{{c.name}}</option>
             </select>
           </div>
-          <div class="form-group"><label>名称</label><input v-model="link.label"></div>
+          <div class="form-group"><label>版本</label><input v-model="appForm.version" placeholder="1.0"></div>
         </div>
-        <div class="form-group"><label>链接URL *</label><input v-model="link.url" placeholder="https://..."></div>
-        <div class="form-group"><label>提取码</label><input v-model="link.password"></div>
-        <button class="btn-sm" @click="saveLink(link)">保存</button>
-      </div>
+        <div class="form-group"><label>图标URL</label><input v-model="appForm.icon" placeholder="https://..."></div>
+        <div class="form-group"><label>包名</label><input v-model="appForm.package_name" placeholder="com.example.app"></div>
+        <div class="form-group"><label>描述</label><textarea v-model="appForm.description" rows="3" placeholder="软件介绍"></textarea></div>
+        <div class="form-row">
+          <div class="form-group"><label>排序</label><input v-model="appForm.sort_order" type="number"></div>
+          <div class="form-group"><label>状态</label>
+            <select v-model="appForm.is_active"><option :value="1">上架</option><option :value="0">下架</option></select>
+          </div>
+        </div>
 
-      <div class="modal-btns">
-        <button class="btn-primary" @click="saveApp">保存软件</button>
-        <button class="btn-ghost" @click="showApp=false">取消</button>
+        <h3 style="margin-top:16px;font-size:15px;">网盘推广链接</h3>
+        <div v-for="(link, i) in appForm.links" :key="i" class="link-item">
+          <div class="info">
+            <div>{{link.label}} <span v-if="link.password">(提取码:{{link.password}})</span></div>
+            <div class="u">{{link.url}}</div>
+          </div>
+          <button class="btn-danger" @click="appForm.links.splice(i,1)">删</button>
+        </div>
+        <button class="btn-ghost" style="width:100%;margin-bottom:8px;" @click="appForm.links.push({pan_type:'uc',label:'UC网盘',url:'',password:''})">+ 添加网盘链接</button>
+        <div v-for="(link, i) in appForm.links.filter(l=>l._editing)" :key="'e'+i" style="background:#F7F8FC;padding:10px;border-radius:10px;margin-bottom:8px;">
+          <div class="form-row">
+            <div class="form-group"><label>类型</label>
+              <select v-model="link.pan_type">
+                <option value="uc">UC网盘</option><option value="quark">夸克</option>
+                <option value="baidu">百度</option><option value="ali">阿里</option><option value="other">其他</option>
+              </select>
+            </div>
+            <div class="form-group"><label>名称</label><input v-model="link.label"></div>
+          </div>
+          <div class="form-group"><label>链接URL *</label><input v-model="link.url" placeholder="https://..."></div>
+          <div class="form-group"><label>提取码</label><input v-model="link.password"></div>
+          <button class="btn-sm" @click="saveLink(link)">保存</button>
+        </div>
+
+        <div class="modal-btns">
+          <button class="btn-primary" @click="saveApp">保存软件</button>
+          <button class="btn-ghost" @click="showApp=false">取消</button>
+        </div>
       </div>
     </div>
-  </div>
 
-  <!-- 分类编辑弹层 -->
-  <div v-if="showCat" class="modal-mask" @click.self="showCat=false">
-    <div class="modal">
-      <h3>{{catForm.id ? '编辑分类' : '添加分类'}}</h3>
-      <div class="form-group"><label>名称 *</label><input v-model="catForm.name" placeholder="分类名"></div>
-      <div class="form-group"><label>颜色</label><input v-model="catForm.color" placeholder="#4C6FFF"></div>
-      <div class="form-group"><label>排序</label><input v-model="catForm.sort_order" type="number"></div>
-      <div class="modal-btns">
-        <button class="btn-primary" @click="saveCat">保存</button>
-        <button class="btn-ghost" @click="showCat=false">取消</button>
+    <!-- 分类编辑弹层 -->
+    <div v-if="showCat" class="modal-mask" @click.self="showCat=false">
+      <div class="modal">
+        <h3>{{catForm.id ? '编辑分类' : '添加分类'}}</h3>
+        <div class="form-group"><label>名称 *</label><input v-model="catForm.name" placeholder="分类名"></div>
+        <div class="form-group"><label>颜色</label><input v-model="catForm.color" placeholder="#4C6FFF"></div>
+        <div class="form-group"><label>排序</label><input v-model="catForm.sort_order" type="number"></div>
+        <div class="modal-btns">
+          <button class="btn-primary" @click="saveCat">保存</button>
+          <button class="btn-ghost" @click="showCat=false">取消</button>
+        </div>
       </div>
     </div>
   </div>
 </div>
+</script>
 
 <script>
 const { createApp } = Vue;
@@ -229,6 +222,7 @@ const store = {
 };
 
 createApp({
+  template: '#app-tpl',
   data() {
     return {
       token: store.token,
@@ -297,19 +291,15 @@ createApp({
         const r = await this.api('app_create', { name: f.name, category_id: f.category_id || null, icon: f.icon, version: f.version, description: f.description, package_name: f.package_name, sort_order: Number(f.sort_order) || 0 }, 'POST');
         f.id = r.data.id;
       }
-      // 保存网盘链接
       for (const link of f.links) {
-        if (link.id) continue; // 已保存的
+        if (link.id) continue;
         if (!link.url) continue;
         await this.api('link_create', { app_id: f.id, pan_type: link.pan_type, label: link.label, url: link.url, password: link.password }, 'POST');
       }
       this.showApp = false;
       this.loadApps();
     },
-    async saveLink(link) {
-      // 临时方案: 链接编辑简化, 保存后刷新
-      this.showApp = false;
-    },
+    saveLink(link) { this.showApp = false; },
     async delApp(app) {
       if (!confirm('删除软件 ' + app.name + '?')) return;
       await this.api('app_delete', { id: app.id }, 'POST');
@@ -335,7 +325,7 @@ createApp({
       this.loadCats();
     },
   },
-}).mount('#admin');
+}).mount('#app');
 </script>
 </body>
 </html>
