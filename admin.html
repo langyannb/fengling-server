@@ -217,6 +217,14 @@ button { cursor: pointer; border: none; border-radius: var(--radius-sm); font-si
             <select v-model="appForm.is_active"><option :value="1">上架</option><option :value="0">下架</option></select>
           </div>
         </div>
+        <div class="form-row">
+          <div class="form-group"><label>标记</label>
+            <select v-model="appForm.is_top"><option :value="1">🔝 置顶</option><option :value="0">不置顶</option></select>
+          </div>
+          <div class="form-group"><label>精选</label>
+            <select v-model="appForm.is_featured"><option :value="1">⭐ 精选</option><option :value="0">非精选</option></select>
+          </div>
+        </div>
         <div class="form-group"><label>整合包 (选择后此软件作为整合包的子项)</label>
           <select v-model="appForm.pack_id">
             <option :value="null">独立软件</option>
@@ -331,7 +339,7 @@ createApp({
       showApp: false, showBanner: false, showCat: false,
       uploading: '',
       colors: ['#4C6FFF', '#22B07D', '#FF8F1F', '#FF4D6D', '#7C4DFF', '#00B8D4', '#FFB300', '#F5455C'],
-      appForm: { id: 0, name: '', category_id: 0, icon: '', version: '', description: '', package_name: '', sort_order: 0, is_active: 1, pack_id: null, links: [] },
+      appForm: { id: 0, name: '', category_id: 0, icon: '', version: '', description: '', package_name: '', sort_order: 0, is_active: 1, pack_id: null, is_top: 0, is_featured: 0, links: [] },
       bannerForm: { id: 0, image: '', title: '', app_id: null, url: '', sort_order: 0, is_active: 1 },
       catForm: { id: 0, name: '', color: '#4C6FFF', sort_order: 0 },
     };
@@ -435,6 +443,7 @@ createApp({
         icon: app ? app.icon : '', version: app ? app.version : '', description: app ? app.description : '',
         package_name: app ? app.package_name : '', sort_order: app ? app.sort_order : 0,
         is_active: app ? Number(app.is_active) : 1, pack_id: app ? (app.pack_id || null) : null,
+        is_top: app ? Number(app.is_top) : 0, is_featured: app ? Number(app.is_featured) : 0,
         links: [],
       };
       this.showApp = true;
@@ -452,6 +461,8 @@ createApp({
               description: d.description || this.appForm.description,
               package_name: d.package_name || this.appForm.package_name,
               pack_id: d.pack_id || null,
+              is_top: Number(d.is_top) || 0,
+              is_featured: Number(d.is_featured) || 0,
               links: (d.pan_links || []).map(l => ({ ...l, _k: 'l' + l.id + Math.random(), _editing: false })),
             };
             // 记录原始链接 id (用于检测保存时被删除的链接)
@@ -486,9 +497,9 @@ createApp({
       }
       let r;
       if (f.id) {
-        r = await this.api('app_update', { id: f.id, name: f.name, category_id: f.category_id || null, icon: f.icon, version: f.version, description: f.description, package_name: f.package_name, sort_order: Number(f.sort_order) || 0, is_active: Number(f.is_active), pack_id: f.pack_id || null }, 'POST');
+        r = await this.api('app_update', { id: f.id, name: f.name, category_id: f.category_id || null, icon: f.icon, version: f.version, description: f.description, package_name: f.package_name, sort_order: Number(f.sort_order) || 0, is_active: Number(f.is_active), pack_id: f.pack_id || null, is_top: Number(f.is_top) || 0, is_featured: Number(f.is_featured) || 0 }, 'POST');
       } else {
-        r = await this.api('app_create', { name: f.name, category_id: f.category_id || null, icon: f.icon, version: f.version, description: f.description, package_name: f.package_name, sort_order: Number(f.sort_order) || 0, pack_id: f.pack_id || null }, 'POST');
+        r = await this.api('app_create', { name: f.name, category_id: f.category_id || null, icon: f.icon, version: f.version, description: f.description, package_name: f.package_name, sort_order: Number(f.sort_order) || 0, pack_id: f.pack_id || null, is_top: Number(f.is_top) || 0, is_featured: Number(f.is_featured) || 0 }, 'POST');
         if (r.code === 0 && r.data) f.id = r.data.id;
       }
       if (r.code !== 0) {

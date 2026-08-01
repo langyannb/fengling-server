@@ -98,6 +98,15 @@ SET @col_exists = (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_S
 SET @sql = IF(@col_exists = 0, 'ALTER TABLE `apps` ADD COLUMN `pack_id` INT DEFAULT NULL AFTER `sort_order`', 'SELECT 1');
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
+-- 置顶/精选标记
+SET @col_exists = (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='flfxk' AND TABLE_NAME='apps' AND COLUMN_NAME='is_top');
+SET @sql = IF(@col_exists = 0, 'ALTER TABLE `apps` ADD COLUMN `is_top` TINYINT DEFAULT 0 AFTER `pack_id`', 'SELECT 1');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @col_exists = (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='flfxk' AND TABLE_NAME='apps' AND COLUMN_NAME='is_featured');
+SET @sql = IF(@col_exists = 0, 'ALTER TABLE `apps` ADD COLUMN `is_featured` TINYINT DEFAULT 0 AFTER `is_top`', 'SELECT 1');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
 -- 默认版本配置 (后续通过管理端更新)
 INSERT IGNORE INTO `settings` (`key`, `value`) VALUES
 ('latest_version', '{"version":"1.0.0","url":"","update_log":""}');

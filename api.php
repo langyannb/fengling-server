@@ -99,7 +99,7 @@ try {
                 $args[] = $categoryId;
             }
             if ($keyword !== '') { $sql .= ' AND a.name LIKE ?'; $args[] = '%' . $keyword . '%'; }
-            $sql .= ' ORDER BY a.sort_order ASC, a.id DESC';
+            $sql .= ' ORDER BY a.is_top DESC, a.sort_order ASC, a.id DESC';
             $stmt = db()->prepare($sql);
             $stmt->execute($args);
             $apps = $stmt->fetchAll();
@@ -108,6 +108,8 @@ try {
                 $app['rating'] = (float)$app['rating'];
                 $app['id'] = (int)$app['id'];
                 $app['pack_id'] = $app['pack_id'] ? (int)$app['pack_id'] : null;
+                $app['is_top'] = (int)$app['is_top'];
+                $app['is_featured'] = (int)$app['is_featured'];
             }
             json_out($apps, 0, 'ok', 60);
 
@@ -151,13 +153,14 @@ try {
         case 'app_update':
             require_admin();
             $id = (int)param('id', 0);
-            $fields = ['name', 'category_id', 'icon', 'version', 'description', 'package_name', 'rating', 'sort_order', 'is_active', 'pack_id'];
+            $fields = ['name', 'category_id', 'icon', 'version', 'description', 'package_name', 'rating', 'sort_order', 'is_active', 'pack_id', 'is_top', 'is_featured'];
             $sql = 'UPDATE apps SET ';
             $args = [];
             foreach ($fields as $f) {
                 $v = param($f);
                 if ($v !== null) {
                     if ($f === 'pack_id') { $sql .= "pack_id = ?, "; $args[] = (int)$v ?: null; }
+                    elseif ($f === 'is_top' || $f === 'is_featured') { $sql .= "$f = ?, "; $args[] = (int)$v ?: 0; }
                     else { $sql .= "$f = ?, "; $args[] = $v; }
                 }
             }
@@ -343,8 +346,8 @@ function insert_app(): int
     if (!$name) json_error('软件名不能为空');
     $categoryId = (int)param('category_id', 0) ?: null;
     $packId = (int)param('pack_id', 0) ?: null;
-    db()->prepare('INSERT INTO apps (category_id, name, icon, version, description, package_name, rating, sort_order, pack_id)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    db()->prepare('INSERT INTO apps (category_id, name, icon, version, description, package_name, rating, sort_order, pack_id, is_top, is_featured)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
         ->execute([
             $categoryId,
             $name,
@@ -355,6 +358,8 @@ function insert_app(): int
             (float)param('rating', 0),
             (int)param('sort_order', 0),
             $packId,
+            (int)param('is_top', 0) ?: 0,
+            (int)param('is_featured', 0) ?: 0,
         ]);
     return (int)db()->lastInsertId();
 }
