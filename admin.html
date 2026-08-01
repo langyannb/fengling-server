@@ -113,6 +113,7 @@ button { cursor: pointer; border: none; border-radius: var(--radius-sm); font-si
   <div v-else class="admin-page">
     <div class="topbar">
       <h1>风铃分享库</h1>
+      <span style="font-size:13px;color:var(--text2);">{{user}}</span>
       <button class="logout" @click="logout">退出</button>
     </div>
 
@@ -314,6 +315,8 @@ const { createApp } = Vue;
 const store = {
   get token() { return localStorage.getItem('fl_token') || ''; },
   set token(v) { localStorage.setItem('fl_token', v); },
+  get user() { return localStorage.getItem('fl_user') || ''; },
+  set user(v) { localStorage.setItem('fl_user', v); },
 };
 
 createApp({
@@ -322,6 +325,7 @@ createApp({
     return {
       token: store.token,
       username: '', password: '', loginErr: '',
+      user: store.user,
       tab: 'stats',
       stats: {}, apps: [], cats: [], banners: [],
       showApp: false, showBanner: false, showCat: false,
@@ -346,14 +350,22 @@ createApp({
         const qs = new URLSearchParams(params).toString();
         if (qs) url += '&' + qs;
       }
-      const res = await fetch(url, opt);
-      // 401: token 失效, 强制重新登录
-      if (res.status === 401) {
-        store.token = ''; this.token = '';
+      let res;
+      try {
+        res = await fetch(url, opt);
+      } catch (e) {
+        this.toast('网络错误: ' + e.message);
+        return { code: -1, msg: '网络错误' };
+      }
+      let body;
+      try { body = await res.json(); } catch (e) { body = { code: -1, msg: '响应解析失败' }; }
+      // 401 (HTTP 或 body): token 失效, 强制重新登录
+      if (res.status === 401 || body.code === 401) {
+        store.token = ''; this.token = ''; store.user = '';
         this.toast('登录已失效, 请重新登录');
         return { code: 401, msg: '未登录' };
       }
-      return res.json();
+      return body;
     },
     toast(msg) {
       const t = document.createElement('div');
@@ -370,13 +382,20 @@ createApp({
     },
     async login() {
       this.loginErr = '';
+      if (!this.username || !this.password) { this.loginErr = '请输入用户名和密码'; return; }
       const r = await this.api('login', { username: this.username, password: this.password }, 'POST');
-      if (r.code === 0) {
-        store.token = r.data.token; this.token = r.data.token;
+      if (r.code === 0 && r.data && r.data.token) {
+        store.token = r.data.token;
+        store.user = (r.data.user && r.data.user.username) || this.username;
+        this.token = r.data.token;
+        this.user = store.user;
+        this.toast('登录成功, 欢迎 ' + this.user);
         this.loadStats(); this.loadCats(); this.loadBanners();
-      } else this.loginErr = r.msg;
+      } else {
+        this.loginErr = r.msg || '登录失败';
+      }
     },
-    logout() { store.token = ''; this.token = ''; },
+    logout() { store.token = ''; this.token = ''; store.user = ''; this.user = ''; },
     async loadStats() { const r = await this.api('stats'); if (r.code === 0) this.stats = r.data; },
     async loadApps() { const r = await this.api('apps'); if (r.code === 0) this.apps = r.data; },
     async loadBanners() { const r = await fetch('api.php?action=banners').then(x => x.json()); if (r.code === 0) this.banners = r.data; },
@@ -432,19 +451,26 @@ createApp({
       // 已有链接先更新
       for (const link of f.links) {
         if (link.id && !link._new) {
-          await this.api('link_update', { id: link.id, pan_type: link.pan_type, label: link.label, url: link.url, password: link.password }, 'POST');
+          const r = await this.api('link_update', { id: link.id, pan_type: link.pan_type, label: link.label, url: link.url, password: link.password }, 'POST');
+          if (r.code !== 0 && r.code !== 401) { this.toast('链接更新失败: ' + r.msg); return; }
         }
       }
+      let r;
       if (f.id) {
-        await this.api('app_update', { id: f.id, name: f.name, category_id: f.category_id || null, icon: f.icon, version: f.version, description: f.description, package_name: f.package_name, sort_order: Number(f.sort_order) || 0, is_active: Number(f.is_active), pack_id: f.pack_id || null }, 'POST');
+        r = await this.api('app_update', { id: f.id, name: f.name, category_id: f.category_id || null, icon: f.icon, version: f.version, description: f.description, package_name: f.package_name, sort_order: Number(f.sort_order) || 0, is_active: Number(f.is_active), pack_id: f.pack_id || null }, 'POST');
       } else {
-        const r = await this.api('app_create', { name: f.name, category_id: f.category_id || null, icon: f.icon, version: f.version, description: f.description, package_name: f.package_name, sort_order: Number(f.sort_order) || 0, pack_id: f.pack_id || null }, 'POST');
-        f.id = r.data.id;
+        r = await this.api('app_create', { name: f.name, category_id: f.category_id || null, icon: f.icon, version: f.version, description: f.description, package_name: f.package_name, sort_order: Number(f.sort_order) || 0, pack_id: f.pack_id || null }, 'POST');
+        if (r.code === 0 && r.data) f.id = r.data.id;
+      }
+      if (r.code !== 0) {
+        if (r.code !== 401) this.toast('保存失败: ' + (r.msg || '未知错误'));
+        return;
       }
       // 新建链接
       for (const link of f.links) {
         if (link._new && link.url) {
-          await this.api('link_create', { app_id: f.id, pan_type: link.pan_type, label: link.label, url: link.url, password: link.password }, 'POST');
+          const lr = await this.api('link_create', { app_id: f.id, pan_type: link.pan_type, label: link.label, url: link.url, password: link.password }, 'POST');
+          if (lr.code !== 0 && lr.code !== 401) { this.toast('链接保存失败: ' + lr.msg); return; }
         }
       }
       this.showApp = false;
@@ -468,10 +494,15 @@ createApp({
     async saveBanner() {
       const f = this.bannerForm;
       if (!f.image) { this.toast('请上传图片'); return; }
+      let r;
       if (f.id) {
-        await this.api('banner_update', { id: f.id, image: f.image, title: f.title, app_id: f.app_id || null, url: f.url || '', sort_order: Number(f.sort_order) || 0, is_active: Number(f.is_active) }, 'POST');
+        r = await this.api('banner_update', { id: f.id, image: f.image, title: f.title, app_id: f.app_id || null, url: f.url || '', sort_order: Number(f.sort_order) || 0, is_active: Number(f.is_active) }, 'POST');
       } else {
-        await this.api('banner_create', { image: f.image, title: f.title, app_id: f.app_id || null, url: f.url || '', sort_order: Number(f.sort_order) || 0, is_active: Number(f.is_active) }, 'POST');
+        r = await this.api('banner_create', { image: f.image, title: f.title, app_id: f.app_id || null, url: f.url || '', sort_order: Number(f.sort_order) || 0, is_active: Number(f.is_active) }, 'POST');
+      }
+      if (r.code !== 0) {
+        if (r.code !== 401) this.toast('保存失败: ' + (r.msg || '未知错误'));
+        return;
       }
       this.showBanner = false;
       this.toast('保存成功');
@@ -490,12 +521,18 @@ createApp({
     async saveCat() {
       const f = this.catForm;
       if (!f.name) { this.toast('请输入分类名'); return; }
+      let r;
       if (f.id) {
-        await this.api('category_update', { id: f.id, name: f.name, color: f.color, sort_order: Number(f.sort_order) || 0 }, 'POST');
+        r = await this.api('category_update', { id: f.id, name: f.name, color: f.color, sort_order: Number(f.sort_order) || 0 }, 'POST');
       } else {
-        await this.api('category_create', { name: f.name, color: f.color, sort_order: Number(f.sort_order) || 0 }, 'POST');
+        r = await this.api('category_create', { name: f.name, color: f.color, sort_order: Number(f.sort_order) || 0 }, 'POST');
+      }
+      if (r.code !== 0) {
+        if (r.code !== 401) this.toast('保存失败: ' + (r.msg || '未知错误'));
+        return;
       }
       this.showCat = false;
+      this.toast('保存成功');
       this.loadCats();
     },
     async delCat(c) {
