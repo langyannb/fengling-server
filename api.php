@@ -249,14 +249,14 @@ try {
 
         case 'banner_create':
             require_admin();
-            db()->prepare('INSERT INTO banners (image, title, app_id, sort_order, is_active) VALUES (?, ?, ?, ?, ?)')
-                ->execute([param('image', ''), param('title', ''), (int)param('app_id', 0) ?: null, (int)param('sort_order', 0), (int)param('is_active', 1)]);
+            db()->prepare('INSERT INTO banners (image, title, app_id, url, sort_order, is_active) VALUES (?, ?, ?, ?, ?, ?)')
+                ->execute([param('image', ''), param('title', ''), (int)param('app_id', 0) ?: null, param('url', ''), (int)param('sort_order', 0), (int)param('is_active', 1)]);
             json_out(['id' => (int)db()->lastInsertId()]);
 
         case 'banner_update':
             require_admin();
             $id = (int)param('id', 0);
-            $fields = ['image', 'title', 'app_id', 'sort_order', 'is_active'];
+            $fields = ['image', 'title', 'app_id', 'url', 'sort_order', 'is_active'];
             $sql = 'UPDATE banners SET ';
             $args = [];
             foreach ($fields as $f) {

@@ -266,6 +266,7 @@ button { cursor: pointer; border: none; border-radius: var(--radius-sm); font-si
           </div>
         </div>
         <div class="form-group"><label>标题</label><input v-model="bannerForm.title" placeholder="轮播标题"></div>
+        <div class="form-group"><label>跳转链接 (填写后优先于关联软件, 内置浏览器打开)</label><input v-model="bannerForm.url" placeholder="https://..."></div>
         <div class="form-group"><label>关联软件 (点击跳转)</label>
           <select v-model="bannerForm.app_id">
             <option :value="null">不关联</option>
@@ -325,7 +326,7 @@ createApp({
       uploading: '',
       colors: ['#4C6FFF', '#22B07D', '#FF8F1F', '#FF4D6D', '#7C4DFF', '#00B8D4', '#FFB300', '#F5455C'],
       appForm: { id: 0, name: '', category_id: 0, icon: '', version: '', description: '', package_name: '', sort_order: 0, is_active: 1, pack_id: null, links: [] },
-      bannerForm: { id: 0, image: '', title: '', app_id: null, sort_order: 0, is_active: 1 },
+      bannerForm: { id: 0, image: '', title: '', app_id: null, url: '', sort_order: 0, is_active: 1 },
       catForm: { id: 0, name: '', color: '#4C6FFF', sort_order: 0 },
     };
   },
@@ -344,6 +345,12 @@ createApp({
         if (qs) url += '&' + qs;
       }
       const res = await fetch(url, opt);
+      // 401: token 失效, 强制重新登录
+      if (res.status === 401) {
+        store.token = ''; this.token = '';
+        this.toast('登录已失效, 请重新登录');
+        return { code: 401, msg: '未登录' };
+      }
       return res.json();
     },
     toast(msg) {
@@ -452,7 +459,7 @@ createApp({
       if (b) {
         this.bannerForm = { ...b, app_id: b.app_id || null };
       } else {
-        this.bannerForm = { id: 0, image: '', title: '', app_id: null, sort_order: 0, is_active: 1 };
+        this.bannerForm = { id: 0, image: '', title: '', app_id: null, url: '', sort_order: 0, is_active: 1 };
       }
       this.showBanner = true;
     },
@@ -460,9 +467,9 @@ createApp({
       const f = this.bannerForm;
       if (!f.image) { this.toast('请上传图片'); return; }
       if (f.id) {
-        await this.api('banner_update', { id: f.id, image: f.image, title: f.title, app_id: f.app_id || null, sort_order: Number(f.sort_order) || 0, is_active: Number(f.is_active) }, 'POST');
+        await this.api('banner_update', { id: f.id, image: f.image, title: f.title, app_id: f.app_id || null, url: f.url || '', sort_order: Number(f.sort_order) || 0, is_active: Number(f.is_active) }, 'POST');
       } else {
-        await this.api('banner_create', { image: f.image, title: f.title, app_id: f.app_id || null, sort_order: Number(f.sort_order) || 0, is_active: Number(f.is_active) }, 'POST');
+        await this.api('banner_create', { image: f.image, title: f.title, app_id: f.app_id || null, url: f.url || '', sort_order: Number(f.sort_order) || 0, is_active: Number(f.is_active) }, 'POST');
       }
       this.showBanner = false;
       this.toast('保存成功');

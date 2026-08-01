@@ -82,10 +82,15 @@ CREATE TABLE IF NOT EXISTS `banners` (
     `image` VARCHAR(500) NOT NULL,
     `title` VARCHAR(100) DEFAULT '',
     `app_id` INT DEFAULT NULL,
+    `url` VARCHAR(500) DEFAULT '',
     `sort_order` INT DEFAULT 0,
     `is_active` TINYINT DEFAULT 1,
     `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+-- 兼容已有表 (MySQL 5.7 无 ADD COLUMN IF NOT EXISTS)
+SET @col_exists = (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='flfxk' AND TABLE_NAME='banners' AND COLUMN_NAME='url');
+SET @sql = IF(@col_exists = 0, 'ALTER TABLE `banners` ADD COLUMN `url` VARCHAR(500) DEFAULT \'\' AFTER `app_id`', 'SELECT 1');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- apps 表加整合包字段 (pack_id 指向父整合包, NULL=独立软件)
 -- 注意: MySQL 5.7 不支持 ADD COLUMN IF NOT EXISTS, 若已执行过则忽略此行
