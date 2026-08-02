@@ -113,6 +113,10 @@ try {
                 $app['pack_id'] = $app['pack_id'] ? (int)$app['pack_id'] : null;
                 $app['is_top'] = (int)$app['is_top'];
                 $app['is_featured'] = (int)$app['is_featured'];
+                // 介绍图片: JSON 数组 -> 数组
+                $app['screenshots'] = $app['screenshots'] ? (json_decode($app['screenshots'], true) ?: []) : [];
+                // 投稿人 QQ 属敏感字段, 仅管理员可见 (App 端一律不给)
+                if (!is_admin()) unset($app['contributor_qq']);
             }
             json_out($apps, 0, 'ok', 60);
 
@@ -146,6 +150,10 @@ try {
             $app['download_count'] = (int)$app['download_count'];
             $app['rating'] = (float)$app['rating'];
             $app['id'] = (int)$app['id'];
+            // 介绍图片: JSON 数组 -> 数组
+            $app['screenshots'] = $app['screenshots'] ? (json_decode($app['screenshots'], true) ?: []) : [];
+            // 投稿人 QQ 属敏感字段, 仅管理员可见
+            if (!is_admin()) unset($app['contributor_qq']);
             json_out($app, 0, 'ok', 60);
 
         case 'app_create':
@@ -156,7 +164,7 @@ try {
         case 'app_update':
             require_admin();
             $id = (int)param('id', 0);
-            $fields = ['name', 'category_id', 'icon', 'version', 'description', 'package_name', 'rating', 'sort_order', 'is_active', 'pack_id', 'is_top', 'is_featured'];
+            $fields = ['name', 'category_id', 'icon', 'version', 'description', 'screenshots', 'package_name', 'rating', 'sort_order', 'is_active', 'pack_id', 'is_top', 'is_featured', 'contributor_qq'];
             $sql = 'UPDATE apps SET ';
             $args = [];
             foreach ($fields as $f) {
@@ -415,6 +423,121 @@ try {
                 'release_date' => $release_date,
             ], 0, 'ok', 600);
 
+        // ============ 投稿名单 (公开: 只返回头像/昵称/说明, 绝不暴露 QQ 号) ============
+        case 'contributors':
+            // 投稿人来自 contributors 表, 投稿应用从 apps.contributor_qq 聚合
+            $rows = db()->query("SELECT c.id, c.qq, c.name, c.bio, c.sort_order, a.name AS app_name
+                                 FROM contributors c
+                                 LEFT JOIN apps a ON a.contributor_qq = c.qq AND a.is_active = 1
+                                 ORDER BY c.sort_order ASC, c.id ASC")->fetchAll();
+            $map = [];
+            $order = [];
+            foreach ($rows as $r) {
+                $qq = trim($r['qq']);
+                if ($qq === '') continue;
+                if (!isset($map[$qq])) {
+                    $order[] = $qq;
+                    $map[$qq] = [
+                        'id' => (int)$r['id'],
+                        // q1.qlogo.cn 是 QQ 官方头像 CDN: /g?b=qq&nk={qq}&s=100 按 QQ 号取头像
+                        'avatar' => 'https://q1.qlogo.cn/g?b=qq&nk=' . urlencode($qq) . '&s=100',
+                        'name' => $r['name'] !== null ? $r['name'] : '',
+                        'bio' => $r['bio'] !== null ? $r['bio'] : '',
+                        'app_names' => [],
+                    ];
+                }
+                if ($r['app_name'] !== null) $map[$qq]['app_names'][] = $r['app_name'];
+            }
+            $result = [];
+            foreach ($order as $qq) $result[] = $map[$qq];
+            json_out($result, 0, 'ok', 120);
+
+        case 'contributor_create':
+            require_admin();
+            $qq = trim(param('qq', ''));
+            if ($qq === '' || !preg_match('/^\d{5,12}$/', $qq)) json_error('QQ 号格式不正确');
+            $name = trim(param('name', ''));
+            $bio = trim(param('bio', ''));
+            $sort = (int)param('sort_order', 0);
+            $st = db()->prepare('SELECT COUNT(*) FROM contributors WHERE qq = ?');
+            $st->execute([$qq]);
+            if ((int)$st->fetchColumn() > 0) json_error('该 QQ 已在投稿名单中');
+            db()->prepare('INSERT INTO contributors (qq, name, bio, sort_order) VALUES (?, ?, ?, ?)')->execute([$qq, $name, $bio, $sort]);
+            json_out(['id' => (int)db()->lastInsertId()]);
+
+        case 'contributor_update':
+            require_admin();
+            $id = (int)param('id', 0);
+            $fields = ['name', 'bio', 'sort_order'];
+            $sql = 'UPDATE contributors SET ';
+            $args = [];
+            foreach ($fields as $f) {
+                $v = param($f);
+                if ($v !== null) { $sql .= "$f = ?, "; $args[] = trim((string)$v); }
+            }
+            if (!$args) json_error('没有要更新的字段');
+            $sql = rtrim($sql, ', ') . ' WHERE id = ?';
+            $args[] = $id;
+            db()->prepare($sql)->execute($args);
+            json_out(null);
+
+        case 'contributor_delete':
+            require_admin();
+            $id = (int)param('id', 0);
+            db()->prepare('DELETE FROM contributors WHERE id = ?')->execute([$id]);
+            json_out(null);
+
+        case 'contributor_apps':
+            // 管理端: 返回投稿人 + 其投稿的应用 (管理专用, 含 QQ)
+            require_admin();
+            $rows = db()->query("SELECT c.id, c.qq, c.name, c.bio, c.sort_order, a.id AS app_id, a.name AS app_name
+                                 FROM contributors c
+                                 LEFT JOIN apps a ON a.contributor_qq = c.qq AND a.is_active = 1
+                                 ORDER BY c.sort_order ASC, c.id ASC")->fetchAll();
+            $map = [];
+            $order = [];
+            foreach ($rows as $r) {
+                $qq = trim($r['qq']);
+                if ($qq === '') continue;
+                if (!isset($map[$qq])) {
+                    $order[] = $qq;
+                    $map[$qq] = [
+                        'id' => (int)$r['id'],
+                        'qq' => $qq,
+                        'name' => $r['name'] !== null ? $r['name'] : '',
+                        'bio' => $r['bio'] !== null ? $r['bio'] : '',
+                        'app_names' => [],
+                    ];
+                }
+                if ($r['app_name'] !== null) $map[$qq]['app_names'][] = $r['app_name'];
+            }
+            $result = [];
+            foreach ($order as $qq) $result[] = $map[$qq];
+            json_out($result, 0, 'ok', 30);
+
+        // ============ 公告 ============
+        case 'notice_get':
+            // 公告 (公开): content + mode (daily=每日一次, every=每次打开) + enabled
+            $row = db()->query("SELECT * FROM settings WHERE `key` = 'notice'")->fetch(PDO::FETCH_ASSOC);
+            $cfg = $row ? json_decode($row['value'], true) : [];
+            $defaults = [
+                'content' => '',
+                'mode' => 'daily',   // daily=每日显示一次, every=每次打开显示
+                'enabled' => 0,      // 1=启用公告
+            ];
+            json_out(array_merge($defaults, $cfg), 0, 'ok', 60);
+
+        case 'notice_set':
+            require_admin();
+            $cfg = json_encode([
+                'content' => param('content', ''),
+                'mode' => param('mode', 'daily'),
+                'enabled' => (int)param('enabled', 0) ? 1 : 0,
+            ], JSON_UNESCAPED_UNICODE);
+            db()->prepare("INSERT INTO settings (`key`, `value`) VALUES ('notice', ?)
+                           ON DUPLICATE KEY UPDATE `value` = ?")->execute([$cfg, $cfg]);
+            json_out(null);
+
         default:
             json_error('未知操作: ' . $action, 404);
     }
@@ -439,6 +562,22 @@ function require_admin(): void
     if (!$user) json_error('登录已失效', 401);
 }
 
+/** 是否为已登录管理员 (不抛错, 用于公开接口按需附带敏感字段) */
+function is_admin(): bool
+{
+    $auth = $_SERVER['HTTP_AUTHORIZATION'] ?? '';
+    $token = '';
+    if (preg_match('/Bearer\s+(\S+)/i', $auth, $m)) {
+        $token = $m[1];
+    } else {
+        $token = param('token', '');
+    }
+    if (!$token) return false;
+    $stmt = db()->prepare('SELECT id FROM users WHERE token = ? AND is_active = 1');
+    $stmt->execute([$token]);
+    return (bool)$stmt->fetch();
+}
+
 /** 插入软件, 返回新 id */
 function insert_app(): int
 {
@@ -446,14 +585,16 @@ function insert_app(): int
     if (!$name) json_error('软件名不能为空');
     $categoryId = (int)param('category_id', 0) ?: null;
     $packId = (int)param('pack_id', 0) ?: null;
-    db()->prepare('INSERT INTO apps (category_id, name, icon, version, description, package_name, rating, sort_order, pack_id, is_top, is_featured)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    db()->prepare('INSERT INTO apps (category_id, name, icon, version, description, screenshots, contributor_qq, package_name, rating, sort_order, pack_id, is_top, is_featured)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
         ->execute([
             $categoryId,
             $name,
             param('icon', ''),
             param('version', ''),
             param('description', ''),
+            param('screenshots', ''),
+            param('contributor_qq', ''),
             param('package_name', ''),
             (float)param('rating', 0),
             (int)param('sort_order', 0),

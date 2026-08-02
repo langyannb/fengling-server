@@ -88,6 +88,17 @@ button { cursor: pointer; border: none; border-radius: var(--radius-sm); font-si
 /* Toast */
 .toast { position: fixed; top: 20px; left: 50%; transform: translateX(-50%); background: rgba(26,26,46,.88); color: #fff; padding: 10px 20px; border-radius: 12px; font-size: 13px; z-index: 999; animation: fadeIn .2s; }
 @keyframes fadeIn { from { opacity: 0; transform: translate(-50%, -10px); } to { opacity: 1; transform: translate(-50%, 0); } }
+/* 富文本编辑器 (公告) */
+.editor-toolbar { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px; background: var(--card2); border: 1.5px solid #E8EAF2; border-bottom: none; border-radius: var(--radius-sm) var(--radius-sm) 0 0; }
+.etb { width: 36px; height: 34px; display: flex; align-items: center; justify-content: center; background: var(--card); border: 1px solid #E8EAF2; border-radius: 8px; font-size: 14px; color: var(--text); }
+.etb:active { background: var(--primary-soft); }
+.etb-color { width: 36px; height: 34px; padding: 0; border: 1px solid #E8EAF2; border-radius: 8px; background: var(--card); cursor: pointer; }
+.editor-area { min-height: 160px; max-height: 320px; overflow-y: auto; background: var(--card); border: 1.5px solid #E8EAF2; border-radius: 0 0 var(--radius-sm) var(--radius-sm); padding: 12px 14px; font-size: 14px; line-height: 1.7; outline: none; }
+.editor-area:focus { border-color: var(--primary); }
+.editor-area img { max-width: 100%; border-radius: 8px; }
+.editor-area a { color: var(--primary); }
+.editor-area ul, .editor-area ol { padding-left: 22px; }
+.editor-area:empty::before { content: attr(placeholder); color: var(--text2); pointer-events: none; }
 </style>
 </head>
 <body>
@@ -124,6 +135,8 @@ button { cursor: pointer; border: none; border-radius: var(--radius-sm); font-si
       <button class="tab" :class="{active: tab==='cats'}" @click="switchTab('cats')">分类</button>
       <button class="tab" :class="{active: tab==='version'}" @click="switchTab('version')">发布</button>
       <button class="tab" :class="{active: tab==='about'}" @click="switchTab('about')">关于</button>
+      <button class="tab" :class="{active: tab==='contrib'}" @click="switchTab('contrib')">投稿</button>
+      <button class="tab" :class="{active: tab==='notice'}" @click="switchTab('notice')">公告</button>
     </div>
 
     <!-- 版本发布 -->
@@ -178,6 +191,85 @@ button { cursor: pointer; border: none; border-radius: var(--radius-sm); font-si
       <div class="modal-btns">
         <button class="btn-primary" @click="saveAbout">保存配置</button>
         <button class="btn-ghost" @click="loadAbout">重置</button>
+      </div>
+    </div>
+
+    <!-- 投稿名单管理 -->
+    <div v-if="tab==='contrib'" class="section">
+      <div class="section-head"><h2>投稿名单</h2></div>
+      <div class="form-group"><label>添加投稿人 (输入 QQ 号, App 端只显示头像/名字/说明, 不显示号码)</label>
+        <div style="display:flex;gap:8px;margin-bottom:8px;">
+          <input v-model="contribQQ" placeholder="QQ号" style="flex:1;" @keyup.enter="addContributor">
+          <button class="btn-sm" style="padding:0 20px;font-size:14px;flex-shrink:0;" @click="addContributor">添加</button>
+        </div>
+        <div style="display:flex;gap:8px;">
+          <input v-model="contribName" placeholder="昵称 (App 端显示)" style="flex:1;">
+          <input v-model="contribBio" placeholder="投稿说明 (一句话, App 端显示)" style="flex:2;">
+        </div>
+      </div>
+      <div style="font-size:12px;color:var(--text2);margin-bottom:14px;">投稿人投稿的应用: 在「软件」tab 编辑软件时填写"投稿人 QQ"即可关联, 此处会自动显示 ta 投稿了哪些软件。</div>
+      <div v-if="!contributors.length" class="empty">暂无投稿人, 上方输入 QQ 号添加</div>
+      <div v-for="c in contributors" :key="c.id" class="list-item">
+        <img :src="'https://q1.qlogo.cn/g?b=qq&nk=' + c.qq + '&s=100'" class="icon" style="border-radius:50%;">
+        <div class="info">
+          <div class="name">{{c.name || c.qq}}</div>
+          <div class="meta">{{c.bio || '暂无说明'}}</div>
+          <div class="meta" style="color:var(--primary);">{{c.app_names && c.app_names.length ? '投稿: ' + c.app_names.join('、') : '暂无投稿应用'}}</div>
+        </div>
+        <button class="btn-sm" @click="editContributor(c)">改</button>
+        <button class="btn-danger" @click="delContributor(c)">删除</button>
+      </div>
+      <!-- 投稿人编辑弹层 -->
+      <div v-if="showContrib" class="modal-mask" @click.self="showContrib=false">
+        <div class="modal">
+          <h3>编辑投稿人 {{contribForm.qq}}</h3>
+          <div class="form-group"><label>昵称 (App 端显示)</label><input v-model="contribForm.name" placeholder="昵称"></div>
+          <div class="form-group"><label>投稿说明 (App 端显示)</label><input v-model="contribForm.bio" placeholder="一句话说明"></div>
+          <div class="form-group"><label>排序 (小的在前)</label><input v-model="contribForm.sort_order" type="number"></div>
+          <div class="modal-btns">
+            <button class="btn-primary" @click="saveContributor">保存</button>
+            <button class="btn-ghost" @click="showContrib=false">取消</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 公告配置 -->
+    <div v-if="tab==='notice'" class="section">
+      <div class="section-head"><h2>公告设置</h2></div>
+      <div class="form-group"><label>公告内容 (富文本编辑器, 支持加粗/颜色/链接/图片)</label>
+        <div class="editor-toolbar">
+          <button type="button" class="etb" @click="execCmd('bold')" title="加粗"><b>B</b></button>
+          <button type="button" class="etb" @click="execCmd('italic')" title="斜体"><i>I</i></button>
+          <button type="button" class="etb" @click="execCmd('underline')" title="下划线"><u>U</u></button>
+          <button type="button" class="etb" @click="execCmd('insertUnorderedList')" title="无序列表">•≡</button>
+          <button type="button" class="etb" @click="execCmd('insertOrderedList')" title="有序列表">1≡</button>
+          <button type="button" class="etb" @click="insertLink" title="插入链接">🔗</button>
+          <button type="button" class="etb" @click="insertNoticeImage" title="插入图片">🖼</button>
+          <input type="color" value="#4C6FFF" class="etb-color" @change="execCmd('foreColor', $event.target.value)" title="文字颜色">
+          <button type="button" class="etb" @click="execCmd('removeFormat')" title="清除格式">T̶</button>
+        </div>
+        <div contenteditable="true" class="editor-area" id="noticeEditor" @input="onNoticeInput" placeholder="输入公告内容..."></div>
+        <div style="font-size:11px;color:var(--text2);margin-top:4px;">链接需以 http:// 或 https:// 开头, App 端点击链接会打开内置浏览器。</div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label>显示频率</label>
+          <select v-model="noticeForm.mode">
+            <option value="daily">每日显示一次</option>
+            <option value="every">每次打开都显示</option>
+          </select>
+        </div>
+        <div class="form-group"><label>状态</label>
+          <select v-model="noticeForm.enabled">
+            <option :value="1">✅ 启用</option>
+            <option :value="0">停用</option>
+          </select>
+        </div>
+      </div>
+      <div style="font-size:12px;color:var(--text2);margin-bottom:14px;">App 端会显示「今日不再提示」复选框, 勾选后当天不再弹出 (每日模式下)。</div>
+      <div class="modal-btns">
+        <button class="btn-primary" @click="saveNotice">保存公告</button>
+        <button class="btn-ghost" @click="loadNotice">重置</button>
       </div>
     </div>
 
@@ -265,6 +357,21 @@ button { cursor: pointer; border: none; border-radius: var(--radius-sm); font-si
             <template v-else><span style="font-size:24px;">+</span><span>上传图标</span></template>
             <div v-if="uploading==='icon'" class="up-tip">上传中...</div>
           </div>
+        </div>
+        <div class="form-group"><label>介绍图片 (应用市场风格, 可多张, 点击上传)</label>
+          <div style="display:flex;flex-wrap:wrap;gap:8px;">
+            <div v-for="(shot, si) in appForm.screenshots" :key="si" style="position:relative;width:96px;height:96px;border-radius:var(--radius-sm);overflow:hidden;border:1.5px solid #E8EAF2;">
+              <img :src="shot" style="width:100%;height:100%;object-fit:cover;">
+              <button type="button" style="position:absolute;top:2px;right:2px;background:rgba(245,69,92,.9);color:#fff;width:20px;height:20px;border-radius:50%;font-size:12px;line-height:20px;padding:0;" @click="appForm.screenshots.splice(si,1)">×</button>
+            </div>
+            <div class="upload-box" @click="pickImage('screenshots')" style="width:96px;height:96px;flex-shrink:0;">
+              <template v-if="uploading==='screenshots'"><span>上传中...</span></template>
+              <template v-else><span style="font-size:24px;">+</span></template>
+            </div>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group"><label>投稿人 QQ (用于关于页投稿名单头像, 不对外显示号码)</label><input v-model="appForm.contributor_qq" placeholder="QQ号, 可留空"></div>
         </div>
         <div class="form-group"><label>包名</label><input v-model="appForm.package_name" placeholder="com.example.app"></div>
         <div class="form-group"><label>描述</label><textarea v-model="appForm.description" rows="3" placeholder="软件介绍"></textarea></div>
@@ -403,10 +510,17 @@ createApp({
       showApp: false, showBanner: false, showCat: false,
       uploading: '',
       colors: ['#4C6FFF', '#22B07D', '#FF8F1F', '#FF4D6D', '#7C4DFF', '#00B8D4', '#FFB300', '#F5455C'],
-      appForm: { id: 0, name: '', category_id: 0, icon: '', version: '', description: '', package_name: '', sort_order: 0, is_active: 1, pack_id: null, is_top: 0, is_featured: 0, links: [] },
+      appForm: { id: 0, name: '', category_id: 0, icon: '', version: '', description: '', screenshots: [], contributor_qq: '', package_name: '', sort_order: 0, is_active: 1, pack_id: null, is_top: 0, is_featured: 0, links: [] },
       bannerForm: { id: 0, image: '', title: '', app_id: null, url: '', sort_order: 0, is_active: 1 },
       catForm: { id: 0, name: '', color: '#4C6FFF', icon: '', sort_order: 0 },
       verForm: { version: '1.0.0', url: '', update_log: '', update_mode: 'internal', force_update: 0, size_mb: 0, release_date: '' },
+      noticeForm: { content: '', mode: 'daily', enabled: 0 },
+      contribQQ: '',
+      contribName: '',
+      contribBio: '',
+      contributors: [],
+      showContrib: false,
+      contribForm: { id: 0, qq: '', name: '', bio: '', sort_order: 0 },
       aboutForm: { qq_group: '', qq_key: '', qq_url: '', website: '', github: '', feedback: '', donate: '', banner_text: '风铃分享库 · 官方频道', banner_sub: '最新软件 · 更新通知 · 交流反馈' },
     };
   },
@@ -455,6 +569,125 @@ createApp({
       if (t === 'cats') this.loadCats();
       if (t === 'version') this.loadVersion();
       if (t === 'about') this.loadAbout();
+      if (t === 'notice') this.loadNotice();
+      if (t === 'contrib') this.loadContributors();
+    },
+    async loadContributors() {
+      try {
+        const r = await this.api('contributor_apps', {}, 'POST');
+        if (r.code === 0) this.contributors = r.data || [];
+      } catch (e) { this.toast('投稿名单加载失败'); }
+    },
+    async addContributor() {
+      const qq = (this.contribQQ || '').trim();
+      if (!qq) { this.toast('请输入 QQ 号'); return; }
+      if (!/^\d{5,12}$/.test(qq)) { this.toast('QQ 号格式不正确'); return; }
+      const r = await this.api('contributor_create', { qq, name: (this.contribName || '').trim(), bio: (this.contribBio || '').trim() }, 'POST');
+      if (r.code !== 0) {
+        if (r.code !== 401) this.toast('添加失败: ' + (r.msg || '未知错误'));
+        return;
+      }
+      this.contribQQ = ''; this.contribName = ''; this.contribBio = '';
+      this.toast('投稿人已添加');
+      this.loadContributors();
+    },
+    editContributor(c) {
+      this.contribForm = { id: c.id, qq: c.qq, name: c.name || '', bio: c.bio || '', sort_order: c.sort_order || 0 };
+      this.showContrib = true;
+    },
+    async saveContributor() {
+      const f = this.contribForm;
+      const r = await this.api('contributor_update', { id: f.id, name: f.name || '', bio: f.bio || '', sort_order: Number(f.sort_order) || 0 }, 'POST');
+      if (r.code !== 0) {
+        if (r.code !== 401) this.toast('保存失败: ' + (r.msg || '未知错误'));
+        return;
+      }
+      this.showContrib = false;
+      this.toast('已保存');
+      this.loadContributors();
+    },
+    async delContributor(c) {
+      if (!confirm('删除投稿人 ' + c.qq + '?')) return;
+      const r = await this.api('contributor_delete', { id: c.id }, 'POST');
+      if (r.code !== 0) {
+        if (r.code !== 401) this.toast('删除失败: ' + (r.msg || '未知错误'));
+        return;
+      }
+      this.toast('已删除');
+      this.loadContributors();
+    },
+    async loadNotice() {
+      try {
+        const r = await fetch('api.php?action=notice_get&_=' + Date.now()).then(x => x.json());
+        if (r.code === 0 && r.data) {
+          this.noticeForm = { content: r.data.content || '', mode: r.data.mode || 'daily', enabled: Number(r.data.enabled) || 0 };
+          // 回填富文本编辑器
+          this.$nextTick(() => {
+            const ed = document.getElementById('noticeEditor');
+            if (ed) ed.innerHTML = this.noticeForm.content;
+          });
+        }
+      } catch (e) { this.toast('公告加载失败'); }
+    },
+    // 富文本编辑命令
+    execCmd(cmd, arg) {
+      const ed = document.getElementById('noticeEditor');
+      if (!ed) return;
+      ed.focus();
+      document.execCommand(cmd, false, arg);
+      this.onNoticeInput();
+    },
+    insertLink() {
+      const url = prompt('输入链接地址 (http:// 或 https:// 开头):', 'https://');
+      if (!url) return;
+      const text = prompt('输入链接文字:', '点击打开');
+      if (!text) return;
+      this.execCmd('insertHTML', `<a href="${url}" target="_blank">${text}</a>`);
+    },
+    insertNoticeImage() {
+      // 复用 pickImage: 上传后插入图片
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = 'image/*';
+      input.onchange = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        this.uploading = 'noticeImg';
+        const fd = new FormData();
+        fd.append('file', file);
+        try {
+          const res = await fetch('api.php?action=upload', {
+            method: 'POST',
+            headers: { 'Authorization': 'Bearer ' + this.token },
+            body: fd,
+          });
+          const r = await res.json();
+          if (r.code === 0 && r.data) {
+            this.execCmd('insertImage', r.data.url);
+            this.toast('图片已插入');
+          } else this.toast(r.msg || '上传失败');
+        } catch (err) { this.toast('上传失败'); }
+        this.uploading = '';
+      };
+      input.click();
+    },
+    onNoticeInput() {
+      const ed = document.getElementById('noticeEditor');
+      if (ed) this.noticeForm.content = ed.innerHTML;
+    },
+    async saveNotice() {
+      const f = this.noticeForm;
+      // 从编辑器同步内容 (确保 contenteditable 最新)
+      const ed = document.getElementById('noticeEditor');
+      if (ed) f.content = ed.innerHTML;
+      const clean = (f.content || '').replace(/<br\s*\/?>/gi, '').replace(/&nbsp;/g, '').replace(/<[^>]+>/g, '').trim();
+      if (!clean) { this.toast('请填写公告内容'); return; }
+      const r = await this.api('notice_set', { content: f.content, mode: f.mode, enabled: Number(f.enabled) ? 1 : 0 }, 'POST');
+      if (r.code !== 0) {
+        if (r.code !== 401) this.toast('保存失败: ' + (r.msg || '未知错误'));
+        return;
+      }
+      this.toast('公告已保存');
     },
     async loadAbout() {
       try {
@@ -537,9 +770,9 @@ createApp({
     },
     logout() { store.token = ''; this.token = ''; store.user = ''; this.user = ''; },
     async loadStats() { const r = await this.api('stats'); if (r.code === 0) this.stats = r.data; },
-    async loadApps() { const r = await this.api('apps'); if (r.code === 0) this.apps = r.data; },
-    async loadBanners() { const r = await fetch('api.php?action=banners').then(x => x.json()); if (r.code === 0) this.banners = r.data; },
-    async loadCats() { const r = await fetch('api.php?action=categories').then(x => x.json()); if (r.code === 0) this.cats = r.data; },
+    async loadApps() { const r = await fetch('api.php?action=apps&_=' + Date.now(), { headers: { 'Authorization': 'Bearer ' + this.token } }).then(x => x.json()); if (r.code === 0) this.apps = r.data; },
+    async loadBanners() { const r = await fetch('api.php?action=banners&_=' + Date.now()).then(x => x.json()); if (r.code === 0) this.banners = r.data; },
+    async loadCats() { const r = await fetch('api.php?action=categories&_=' + Date.now()).then(x => x.json()); if (r.code === 0) this.cats = r.data; },
     // 图片上传 (直接选文件, 不是填 URL)
     pickImage(target) {
       const input = document.createElement('input');
@@ -562,6 +795,10 @@ createApp({
             if (target === 'icon') this.appForm.icon = r.data.url;
             else if (target === 'banner') this.bannerForm.image = r.data.url;
             else if (target === 'catIcon') this.catForm.icon = r.data.url;
+            else if (target === 'screenshots') {
+              if (!this.appForm.screenshots) this.appForm.screenshots = [];
+              this.appForm.screenshots.push(r.data.url);
+            }
             this.toast('上传成功');
           } else this.toast(r.msg);
         } catch (err) { this.toast('上传失败'); }
@@ -574,6 +811,8 @@ createApp({
       this.appForm = {
         id: app ? app.id : 0, name: app ? app.name : '', category_id: app ? (Number(app.category_id) || 0) : 0,
         icon: app ? app.icon : '', version: app ? app.version : '', description: app ? app.description : '',
+        screenshots: (app && app.screenshots) ? [...app.screenshots] : [],
+        contributor_qq: app ? (app.contributor_qq || '') : '',
         package_name: app ? app.package_name : '', sort_order: app ? app.sort_order : 0,
         is_active: app ? Number(app.is_active) : 1, pack_id: app ? (app.pack_id || null) : null,
         is_top: app ? Number(app.is_top) : 0, is_featured: app ? Number(app.is_featured) : 0,
@@ -583,7 +822,9 @@ createApp({
       // 编辑已有软件: 异步加载详情(含网盘链接), 否则编辑时链接不可见
       if (app && app.id) {
         try {
-          const r = await fetch('api.php?action=app_detail&id=' + app.id).then(x => x.json());
+          const r = await fetch('api.php?action=app_detail&id=' + app.id + '&_=' + Date.now(), {
+            headers: { 'Authorization': 'Bearer ' + this.token }
+          }).then(x => x.json());
           if (r.code === 0 && r.data) {
             const d = r.data;
             this.appForm = {
@@ -592,6 +833,8 @@ createApp({
               icon: d.icon || this.appForm.icon,
               version: d.version || this.appForm.version,
               description: d.description || this.appForm.description,
+              screenshots: (d.screenshots && d.screenshots.length) ? [...d.screenshots] : this.appForm.screenshots,
+              contributor_qq: d.contributor_qq !== undefined ? (d.contributor_qq || '') : this.appForm.contributor_qq,
               package_name: d.package_name || this.appForm.package_name,
               pack_id: d.pack_id || null,
               is_top: Number(d.is_top) || 0,
@@ -630,9 +873,9 @@ createApp({
       }
       let r;
       if (f.id) {
-        r = await this.api('app_update', { id: f.id, name: f.name, category_id: f.category_id || null, icon: f.icon, version: f.version, description: f.description, package_name: f.package_name, sort_order: Number(f.sort_order) || 0, is_active: Number(f.is_active), pack_id: f.pack_id || null, is_top: Number(f.is_top) || 0, is_featured: Number(f.is_featured) || 0 }, 'POST');
+        r = await this.api('app_update', { id: f.id, name: f.name, category_id: f.category_id || null, icon: f.icon, version: f.version, description: f.description, screenshots: JSON.stringify(f.screenshots || []), contributor_qq: f.contributor_qq || '', package_name: f.package_name, sort_order: Number(f.sort_order) || 0, is_active: Number(f.is_active), pack_id: f.pack_id || null, is_top: Number(f.is_top) || 0, is_featured: Number(f.is_featured) || 0 }, 'POST');
       } else {
-        r = await this.api('app_create', { name: f.name, category_id: f.category_id || null, icon: f.icon, version: f.version, description: f.description, package_name: f.package_name, sort_order: Number(f.sort_order) || 0, pack_id: f.pack_id || null, is_top: Number(f.is_top) || 0, is_featured: Number(f.is_featured) || 0 }, 'POST');
+        r = await this.api('app_create', { name: f.name, category_id: f.category_id || null, icon: f.icon, version: f.version, description: f.description, screenshots: JSON.stringify(f.screenshots || []), contributor_qq: f.contributor_qq || '', package_name: f.package_name, sort_order: Number(f.sort_order) || 0, pack_id: f.pack_id || null, is_top: Number(f.is_top) || 0, is_featured: Number(f.is_featured) || 0 }, 'POST');
         if (r.code === 0 && r.data) f.id = r.data.id;
       }
       if (r.code !== 0) {

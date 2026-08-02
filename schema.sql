@@ -107,6 +107,15 @@ SET @col_exists = (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_S
 SET @sql = IF(@col_exists = 0, 'ALTER TABLE `apps` ADD COLUMN `is_featured` TINYINT DEFAULT 0 AFTER `is_top`', 'SELECT 1');
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
+-- 介绍图片 (JSON 数组) + 投稿人 QQ
+SET @col_exists = (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='flfxk' AND TABLE_NAME='apps' AND COLUMN_NAME='screenshots');
+SET @sql = IF(@col_exists = 0, 'ALTER TABLE `apps` ADD COLUMN `screenshots` TEXT DEFAULT NULL AFTER `description`', 'SELECT 1');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @col_exists = (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='flfxk' AND TABLE_NAME='apps' AND COLUMN_NAME='contributor_qq');
+SET @sql = IF(@col_exists = 0, 'ALTER TABLE `apps` ADD COLUMN `contributor_qq` VARCHAR(20) DEFAULT '''' AFTER `screenshots`', 'SELECT 1');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
 -- 默认版本配置 (后续通过管理端更新)
 INSERT IGNORE INTO `settings` (`key`, `value`) VALUES
 ('latest_version', '{"version":"1.0.0","url":"","update_log":""}');
