@@ -480,7 +480,7 @@ button { cursor: pointer; border: none; border-radius: var(--radius-sm); font-si
         </div>
         <div class="form-sec">发布设置</div>
         <div class="form-row">
-          <div class="form-group"><label>发布日期 (新软件默认今天)</label><input v-model="appForm.release_date" type="date"></div>
+          <div class="form-group"><label>发布日期 (显示用)</label><input v-model="appForm.release_date" type="date"></div>
           <div class="form-group"><label>排序 (已改为按时间, 保留备用)</label><input v-model="appForm.sort_order" type="number"></div>
         </div>
         <div class="form-row">
@@ -495,9 +495,14 @@ button { cursor: pointer; border: none; border-radius: var(--radius-sm); font-si
           <div class="form-group"><label>精选</label>
             <select v-model="appForm.is_featured"><option :value="1">⭐ 精选</option><option :value="0">非精选</option></select>
           </div>
-          <div class="form-group"><label>投稿人 QQ (关于页头像, 不显示号码)</label><input v-model="appForm.contributor_qq" placeholder="QQ号, 可留空"></div>
+          <div class="form-group"><label>新版本标 (勾选=标新 3 天)</label>
+            <select v-model="appForm.is_new" @change="newFlagTouched = true">
+              <option :value="1">✨ 标「新」</option><option :value="0">不标</option>
+            </select>
+          </div>
         </div>
-        <div class="form-tip">✨ 「新」标规则：新添加软件或改版本号 → 自动标「新」并在 App 端靠前排，3 天后自动消失。手动改发布日期可控制。</div>
+        <div class="form-group"><label>投稿人 QQ (关于页头像, 不显示号码)</label><input v-model="appForm.contributor_qq" placeholder="QQ号, 可留空"></div>
+        <div class="form-tip">✨ 「新」标规则：<b>已有的软件改版本号 → 自动标「新」3 天</b>；也可手动勾选「新版本标」标新 3 天；到期自动消失。新添加的软件不会自动标新。</div>
         <div class="form-group"><label>整合包 (选择后此软件作为整合包的子项)</label>
           <select v-model="appForm.pack_id">
             <option :value="null">独立软件</option>
@@ -630,7 +635,8 @@ createApp({
       uploading: '',
       uploadProgress: '',
       colors: ['#4C6FFF', '#22B07D', '#FF8F1F', '#FF4D6D', '#7C4DFF', '#00B8D4', '#FFB300', '#F5455C'],
-      appForm: { id: 0, name: '', category_id: 0, icon: '', version: '', description: '', screenshots: [], contributor_qq: '', package_name: '', sort_order: 0, is_active: 1, pack_id: null, is_top: 0, is_featured: 0, release_date: '', links: [] },
+      appForm: { id: 0, name: '', category_id: 0, icon: '', version: '', description: '', screenshots: [], contributor_qq: '', package_name: '', sort_order: 0, is_active: 1, pack_id: null, is_top: 0, is_featured: 0, release_date: '', is_new: 0, links: [] },
+      newFlagTouched: false, // 「新版本标」是否被手动改过 (没改过则让后端按版本变更自动标新)
       bannerForm: { id: 0, image: '', title: '', app_id: null, url: '', sort_order: 0, is_active: 1 },
       catForm: { id: 0, name: '', color: '#4C6FFF', icon: '', sort_order: 0 },
       verForm: { version: '1.0.0', url: '', update_log: '', update_mode: 'internal', force_update: 0, size_mb: 0, release_date: '' },
@@ -979,6 +985,7 @@ createApp({
     },
     // 软件
     async openApp(app) {
+      this.newFlagTouched = false;
       this.appForm = {
         id: app ? app.id : 0, name: app ? app.name : '', category_id: app ? (Number(app.category_id) || 0) : 0,
         icon: app ? app.icon : '', version: app ? app.version : '', description: app ? app.description : '',
@@ -988,6 +995,7 @@ createApp({
         is_active: app ? Number(app.is_active) : 1, pack_id: app ? (app.pack_id || null) : null,
         is_top: app ? Number(app.is_top) : 0, is_featured: app ? Number(app.is_featured) : 0,
         release_date: app ? (app.release_date || '') : '',
+        is_new: app ? Number(app.is_new) : 0,
         links: [],
       };
       this.showApp = true;
@@ -1012,6 +1020,7 @@ createApp({
               is_top: Number(d.is_top) || 0,
               is_featured: Number(d.is_featured) || 0,
               release_date: d.release_date || '',
+              is_new: Number(d.is_new) || 0,
               links: (d.pan_links || []).map(l => ({ ...l, _k: 'l' + l.id + Math.random(), _editing: false })),
             };
             // 记录原始链接 id (用于检测保存时被删除的链接)
@@ -1046,9 +1055,9 @@ createApp({
       }
       let r;
       if (f.id) {
-        r = await this.api('app_update', { id: f.id, name: f.name, category_id: f.category_id || null, icon: f.icon, version: f.version, description: f.description, screenshots: JSON.stringify(f.screenshots || []), contributor_qq: f.contributor_qq || '', package_name: f.package_name, sort_order: Number(f.sort_order) || 0, is_active: Number(f.is_active), pack_id: f.pack_id || null, is_top: Number(f.is_top) || 0, is_featured: Number(f.is_featured) || 0, release_date: f.release_date || '' }, 'POST');
+        r = await this.api('app_update', { id: f.id, name: f.name, category_id: f.category_id || null, icon: f.icon, version: f.version, description: f.description, screenshots: JSON.stringify(f.screenshots || []), contributor_qq: f.contributor_qq || '', package_name: f.package_name, sort_order: Number(f.sort_order) || 0, is_active: Number(f.is_active), pack_id: f.pack_id || null, is_top: Number(f.is_top) || 0, is_featured: Number(f.is_featured) || 0, release_date: f.release_date || '', ...(this.newFlagTouched ? { new_flag: Number(f.is_new) ? 1 : 0 } : {}) }, 'POST');
       } else {
-        r = await this.api('app_create', { name: f.name, category_id: f.category_id || null, icon: f.icon, version: f.version, description: f.description, screenshots: JSON.stringify(f.screenshots || []), contributor_qq: f.contributor_qq || '', package_name: f.package_name, sort_order: Number(f.sort_order) || 0, pack_id: f.pack_id || null, is_top: Number(f.is_top) || 0, is_featured: Number(f.is_featured) || 0, release_date: f.release_date || '' }, 'POST');
+        r = await this.api('app_create', { name: f.name, category_id: f.category_id || null, icon: f.icon, version: f.version, description: f.description, screenshots: JSON.stringify(f.screenshots || []), contributor_qq: f.contributor_qq || '', package_name: f.package_name, sort_order: Number(f.sort_order) || 0, pack_id: f.pack_id || null, is_top: Number(f.is_top) || 0, is_featured: Number(f.is_featured) || 0, release_date: f.release_date || '', ...(this.newFlagTouched ? { new_flag: Number(f.is_new) ? 1 : 0 } : {}) }, 'POST');
         if (r.code === 0 && r.data) f.id = r.data.id;
       }
       if (r.code !== 0) {
