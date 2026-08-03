@@ -1,6 +1,8 @@
 <?php
 // 风铃分享库 - API 入口
 // 所有接口统一走这里: /api.php?action=xxx
+// 抑制 PHP 8.x deprecated 警告 (imagedestroy/curl_close 等无效果但会污染 JSON 响应)
+error_reporting(E_ALL & ~E_DEPRECATED & ~E_NOTICE & ~E_WARNING);
 require_once __DIR__ . '/config.php';
 
 header('Access-Control-Allow-Origin: *');
@@ -13,6 +15,143 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 }
 
 $action = $_GET['action'] ?? '';
+
+
+
+// ============ 雨云对象存储 (S3 兼容) ============
+define('S3_ENDPOINT', 'https://cn-nb1.rains3.com');
+define('S3_BUCKET', 'fenglin');
+define('S3_REGION', 'cn-nb1');
+define('S3_ACCESS_KEY', 'qLvix4DJFzd4DS1n');
+define('S3_SECRET_KEY', 'ENhWei361GTC752TsoayUlhcb7svyn');
+define('S3_PUBLIC_URL', 'https://fenglin.cn-nb1.rains3.com'); // 公共读地址
+
+/** HMAC-SHA256 辅助 */
+function s3_hmac(string $key, string $msg): string {
+    return hash_hmac('sha256', $msg, $key, true);
+}
+
+/** 生成 AWS SigV4 签名头 */
+function s3_sign_v4(string $method, string $path, string $payloadHash): array {
+    $now = gmdate('Ymd\THis\Z');
+    $dateStamp = gmdate('Ymd');
+    $host = parse_url(S3_ENDPOINT, PHP_URL_HOST);
+    $canonicalHeaders = "host:" . $host . "\nx-amz-content-sha256:" . $payloadHash . "\nx-amz-date:" . $now . "\n";
+    $signedHeaders = "host;x-amz-content-sha256;x-amz-date";
+    $canonicalRequest = $method . "\n" . $path . "\n\n" . $canonicalHeaders . "\n" . $signedHeaders . "\n" . $payloadHash;
+    $scope = $dateStamp . "/" . S3_REGION . "/s3/aws4_request";
+    $stringToSign = "AWS4-HMAC-SHA256\n" . $now . "\n" . $scope . "\n" . hash('sha256', $canonicalRequest);
+    $kDate = s3_hmac("AWS4" . S3_SECRET_KEY, $dateStamp);
+    $kRegion = s3_hmac($kDate, S3_REGION);
+    $kService = s3_hmac($kRegion, "s3");
+    $kSigning = s3_hmac($kService, "aws4_request");
+    $signature = hash_hmac('sha256', $stringToSign, $kSigning);
+    return [
+        "Authorization: AWS4-HMAC-SHA256 Credential=" . S3_ACCESS_KEY . "/" . $scope .
+            ", SignedHeaders=" . $signedHeaders . ", Signature=" . $signature,
+        "x-amz-date: " . $now,
+        "x-amz-content-sha256: " . $payloadHash,
+    ];
+}
+
+/**
+ * 上传文件到雨云 S3 (SigV4 + curl)
+ * @param string $localPath 本地文件路径
+ * @param string $key 对象键 (如 images/xxx.png)
+ * @param string $contentType MIME 类型
+ * @return bool 是否成功
+ */
+function s3_upload(string $localPath, string $key, string $contentType = 'application/octet-stream'): bool {
+    if (!file_exists($localPath)) return false;
+    $body = file_get_contents($localPath);
+    if ($body === false) return false;
+    $payloadHash = hash('sha256', $body);
+    $path = "/" . S3_BUCKET . "/" . $key;
+    $headers = s3_sign_v4('PUT', $path, $payloadHash);
+    $headers[] = "Content-Type: " . $contentType;
+    $ch = curl_init(S3_ENDPOINT . $path);
+    curl_setopt_array($ch, [
+        CURLOPT_CUSTOMREQUEST => 'PUT',
+        CURLOPT_POSTFIELDS => $body,
+        CURLOPT_HTTPHEADER => $headers,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_CONNECTTIMEOUT => 15,
+        CURLOPT_TIMEOUT => 120,
+    ]);
+    $resp = curl_exec($ch);
+    $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    return $code >= 200 && $code < 300;
+}
+
+/** 上传原始字节到 S3 (内存直接上传, 不落盘) */
+function s3_upload_bytes(string $data, string $key, string $contentType = 'application/octet-stream'): bool {
+    $payloadHash = hash('sha256', $data);
+    $path = "/" . S3_BUCKET . "/" . $key;
+    $headers = s3_sign_v4('PUT', $path, $payloadHash);
+    $headers[] = "Content-Type: " . $contentType;
+    $ch = curl_init(S3_ENDPOINT . $path);
+    curl_setopt_array($ch, [
+        CURLOPT_CUSTOMREQUEST => 'PUT',
+        CURLOPT_POSTFIELDS => $data,
+        CURLOPT_HTTPHEADER => $headers,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_CONNECTTIMEOUT => 15,
+        CURLOPT_TIMEOUT => 300,
+    ]);
+    $resp = curl_exec($ch);
+    $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    return $code >= 200 && $code < 300;
+}
+
+/** 删除 S3 对象 */
+function s3_delete(string $key): bool {
+    $payloadHash = hash('sha256', '');
+    $path = "/" . S3_BUCKET . "/" . $key;
+    $headers = s3_sign_v4('DELETE', $path, $payloadHash);
+    $ch = curl_init(S3_ENDPOINT . $path);
+    curl_setopt_array($ch, [
+        CURLOPT_CUSTOMREQUEST => 'DELETE',
+        CURLOPT_HTTPHEADER => $headers,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_CONNECTTIMEOUT => 15,
+        CURLOPT_TIMEOUT => 60,
+    ]);
+    $resp = curl_exec($ch);
+    $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    return $code >= 200 && $code < 300;
+}
+
+/** 生成对象键: 目录/日期_随机.ext */
+function s3_key(string $dir, string $ext): string {
+    return $dir . "/" . date('YmdHis') . "_" . bin2hex(random_bytes(4)) . "." . $ext;
+}
+
+/** 图片压缩 (GD): 压到 maxWidth 宽内 + JPEG 质量 80, 返回压缩后字节 */
+function compress_image(string $data, string $ext, int $maxWidth = 1600, int $quality = 80): string {
+    $img = @imagecreatefromstring($data);
+    if (!$img) return $data; // 无法解析, 原样返回
+    $w = imagesx($img);
+    $h = imagesy($img);
+    if ($w > $maxWidth) {
+        $nh = (int)round($h * $maxWidth / $w);
+        $dst = imagecreatetruecolor($maxWidth, $nh);
+        // 保持透明 (png/webp)
+        imagealphablending($dst, false);
+        imagesavealpha($dst, true);
+        imagecopyresampled($dst, $img, 0, 0, 0, 0, $maxWidth, $nh, $w, $h);
+        $img = $dst;
+    }
+    ob_start();
+    if (in_array($ext, ['jpg', 'jpeg'])) {
+        imagejpeg($img, null, $quality);
+    } elseif ($ext === 'webp') {
+        imagewebp($img, null, $quality);
+    } else { // png/gif: 保持格式, png 压缩级别
+        imagepng($img, null, 7);
+    }
+    $out = ob_get_clean();
+    return $out ?: $data;
+}
 
 try {
     switch ($action) {
@@ -28,7 +167,9 @@ try {
                 json_error('用户名或密码错误');
             }
             $token = make_token();
+            // 多会话: 每个登录会话独立 token, 不覆盖 users.token (多设备登录互不顶掉)
             db()->prepare('UPDATE users SET token = ? WHERE id = ?')->execute([$token, $user['id']]);
+            try { db()->prepare('INSERT INTO sessions (user_id, token) VALUES (?, ?)')->execute([$user['id'], $token]); } catch (Exception $e) {}
             json_out([
                 'token' => $token,
                 'user' => [
@@ -41,12 +182,16 @@ try {
 
         case 'logout':
             $token = param('token', '');
-            if ($token) db()->prepare('UPDATE users SET token = NULL WHERE token = ?')->execute([$token]);
+            if ($token) {
+                db()->prepare('DELETE FROM sessions WHERE token = ?')->execute([$token]);
+                // 仅当 users.token 等于当前 token 才清 (避免顶掉其他会话)
+                db()->prepare('UPDATE users SET token = NULL WHERE token = ?')->execute([$token]);
+            }
             json_out(null);
 
         // ============ 分类 (公开读, 管理写) ============
         case 'categories':
-            json_out(db()->query('SELECT * FROM categories ORDER BY sort_order ASC, id ASC')->fetchAll(), 0, 'ok', 300);
+            json_out(db()->query('SELECT * FROM categories ORDER BY sort_order ASC, id ASC')->fetchAll());
 
         case 'category_create':
             require_admin();
@@ -118,7 +263,7 @@ try {
                 // 投稿人 QQ 属敏感字段, 仅管理员可见 (App 端一律不给)
                 if (!is_admin()) unset($app['contributor_qq']);
             }
-            json_out($apps, 0, 'ok', 60);
+            json_out($apps);
 
         case 'app_detail':
             $id = (int)param('id', 0);
@@ -154,7 +299,7 @@ try {
             $app['screenshots'] = $app['screenshots'] ? (json_decode($app['screenshots'], true) ?: []) : [];
             // 投稿人 QQ 属敏感字段, 仅管理员可见
             if (!is_admin()) unset($app['contributor_qq']);
-            json_out($app, 0, 'ok', 60);
+            json_out($app);
 
         case 'app_create':
             require_admin();
@@ -249,12 +394,19 @@ try {
             if (!in_array($ext, $allowed)) json_error('不支持的文件类型: ' . $ext);
             $maxSize = $isApk ? 200 * 1024 * 1024 : 10 * 1024 * 1024;
             if ($file['size'] > $maxSize) json_error('文件不能超过 ' . ($isApk ? '200MB' : '10MB'));
-            $filename = date('YmdHis') . '_' . bin2hex(random_bytes(4)) . '.' . $ext;
-            $uploadDir = __DIR__ . '/uploads/';
-            if (!is_dir($uploadDir)) mkdir($uploadDir, 0755, true);
-            if (!move_uploaded_file($file['tmp_name'], $uploadDir . $filename)) json_error('保存失败');
-            $url = 'http://' . ($_SERVER['HTTP_HOST'] ?? 'REDACTED_SERVER_HOST:9845') . '/uploads/' . $filename;
-            json_out(['url' => $url, 'filename' => $filename, 'size' => $file['size']]);
+            $raw = file_get_contents($file['tmp_name']);
+            if ($raw === false) json_error('读取文件失败');
+            // 图片自动压缩 (压到 1600px 宽内, JPEG/WebP 质量 80) — 不占服务器磁盘
+            if (!$isApk && in_array($ext, ['jpg', 'jpeg', 'png', 'webp'])) {
+                $raw = compress_image($raw, $ext, 1600, 80);
+            }
+            // 上传到雨云 S3 (不落服务器磁盘, 不耗服务器存储)
+            $key = s3_key($isApk ? 'files' : 'images', $ext);
+            $mime = $isApk ? 'application/vnd.android.package-archive'
+                : (in_array($ext, ['jpg','jpeg']) ? 'image/jpeg' : ($ext === 'png' ? 'image/png' : ($ext === 'webp' ? 'image/webp' : 'image/gif')));
+            if (!s3_upload_bytes($raw, $key, $mime)) json_error('上传对象存储失败');
+            $url = S3_PUBLIC_URL . '/' . $key;
+            json_out(['url' => $url, 'filename' => $key, 'size' => strlen($raw)]);
 
         // ============ 轮播图 ============
         case 'banners':
@@ -262,7 +414,7 @@ try {
                                  LEFT JOIN apps a ON b.app_id = a.id
                                  WHERE b.is_active = 1 ORDER BY b.sort_order ASC, b.id ASC')->fetchAll();
             foreach ($rows as &$r) { $r['id'] = (int)$r['id']; $r['app_id'] = $r['app_id'] ? (int)$r['app_id'] : null; }
-            json_out($rows, 0, 'ok', 300);
+            json_out($rows);
 
         case 'banner_create':
             require_admin();
@@ -302,12 +454,29 @@ try {
             $topLinks = db()->query('SELECT l.id, l.label, COUNT(c.id) AS cnt FROM clicks c
                                      JOIN pan_links l ON c.link_id = l.id
                                      GROUP BY l.id ORDER BY cnt DESC LIMIT 10')->fetchAll();
+            // 软件打开排行: 按软件聚合下载点击次数 (用户要求"所有统计")
+            $topApps = db()->query('SELECT a.id, a.name, a.icon, COUNT(c.id) AS cnt
+                                    FROM clicks c
+                                    JOIN pan_links l ON c.link_id = l.id
+                                    JOIN apps a ON l.app_id = a.id
+                                    GROUP BY a.id ORDER BY cnt DESC LIMIT 10')->fetchAll();
+            foreach ($topApps as &$ta) { $ta['id'] = (int)$ta['id']; $ta['cnt'] = (int)$ta['cnt']; }
+            // 今日软件打开排行
+            $topAppsToday = db()->query("SELECT a.id, a.name, a.icon, COUNT(c.id) AS cnt
+                                    FROM clicks c
+                                    JOIN pan_links l ON c.link_id = l.id
+                                    JOIN apps a ON l.app_id = a.id
+                                    WHERE c.created_at >= CURDATE()
+                                    GROUP BY a.id ORDER BY cnt DESC LIMIT 10")->fetchAll();
+            foreach ($topAppsToday as &$tat) { $tat['id'] = (int)$tat['id']; $tat['cnt'] = (int)$tat['cnt']; }
             json_out([
                 'total_apps' => $totalApps,
                 'total_downloads' => $totalDownloads,
                 'total_clicks' => $totalClicks,
                 'today_clicks' => $todayClicks,
                 'top_links' => $topLinks,
+                'top_apps' => $topApps,
+                'top_apps_today' => $topAppsToday,
             ]);
 
         // ============ APK 上传 + 版本发布 (管理) ============
@@ -320,13 +489,48 @@ try {
             if ($size <= 0 || $size > 200 * 1024 * 1024) json_error('文件大小无效 (最大 200MB)');
             $ext = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
             if ($ext !== 'apk') json_error('仅支持 .apk 文件');
-            $dir = __DIR__ . '/uploads/apk';
-            if (!is_dir($dir)) @mkdir($dir, 0755, true);
-            $name = 'fengling_' . date('Ymd_His') . '.apk';
-            $dest = $dir . '/' . $name;
-            if (!move_uploaded_file($file['tmp_name'], $dest)) json_error('文件保存失败');
-            $base = 'http://' . ($_SERVER['HTTP_HOST'] ?? 'REDACTED_SERVER_HOST:9845');
-            json_out(['url' => $base . '/uploads/apk/' . $name, 'size' => $size]);
+            // 上传到雨云 S3 (大文件流式, 不占服务器磁盘)
+            $key = 'apk/fengling_' . date('Ymd_His') . '.apk';
+            $path = "/" . S3_BUCKET . "/" . $key;
+            $payloadHash = hash('sha256', ''); // 流式用 UNSIGNED-PAYLOAD
+            $ch = curl_init(S3_ENDPOINT . $path);
+            $fp = fopen($file['tmp_name'], 'rb');
+            if (!$fp) json_error('读取文件失败');
+            // 流式上传需要 x-amz-content-sha256: UNSIGNED-PAYLOAD
+            $now = gmdate('Ymd\THis\Z');
+            $dateStamp = gmdate('Ymd');
+            $host = parse_url(S3_ENDPOINT, PHP_URL_HOST);
+            $canonicalHeaders = "host:" . $host . "\nx-amz-content-sha256:UNSIGNED-PAYLOAD\nx-amz-date:" . $now . "\n";
+            $signedHeaders = "host;x-amz-content-sha256;x-amz-date";
+            $canonicalRequest = "PUT\n" . $path . "\n\n" . $canonicalHeaders . "\n" . $signedHeaders . "\nUNSIGNED-PAYLOAD";
+            $scope = $dateStamp . "/" . S3_REGION . "/s3/aws4_request";
+            $stringToSign = "AWS4-HMAC-SHA256\n" . $now . "\n" . $scope . "\n" . hash('sha256', $canonicalRequest);
+            $kDate = s3_hmac("AWS4" . S3_SECRET_KEY, $dateStamp);
+            $kRegion = s3_hmac($kDate, S3_REGION);
+            $kService = s3_hmac($kRegion, "s3");
+            $kSigning = s3_hmac($kService, "aws4_request");
+            $signature = hash_hmac('sha256', $stringToSign, $kSigning);
+            $auth = "AWS4-HMAC-SHA256 Credential=" . S3_ACCESS_KEY . "/" . $scope .
+                ", SignedHeaders=" . $signedHeaders . ", Signature=" . $signature;
+            curl_setopt_array($ch, [
+                CURLOPT_PUT => true,
+                CURLOPT_INFILE => $fp,
+                CURLOPT_INFILESIZE => $size,
+                CURLOPT_HTTPHEADER => [
+                    "Authorization: " . $auth,
+                    "x-amz-date: " . $now,
+                    "x-amz-content-sha256: UNSIGNED-PAYLOAD",
+                    "Content-Type: application/vnd.android.package-archive",
+                ],
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_CONNECTTIMEOUT => 20,
+                CURLOPT_TIMEOUT => 600,
+            ]);
+            $resp = curl_exec($ch);
+            $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                    fclose($fp);
+            if ($code < 200 || $code >= 300) json_error('上传对象存储失败 (HTTP ' . $code . ')');
+            json_out(['url' => S3_PUBLIC_URL . '/' . $key, 'size' => $size]);
 
         case 'version_update':
             require_admin();
@@ -335,12 +539,26 @@ try {
             $update_log = param('update_log', '');
             $update_mode = param('update_mode', 'internal'); // internal=内置浏览器, external=外置浏览器
             $force_update = (int)param('force_update', 0); // 1=强制更新
-            // APK 大小: 未填时自动从上传文件计算
+            // APK 大小: 未填时自动获取 (本地旧路径或 S3 URL)
             $size_mb = (float)param('size_mb', 0);
-            if ($size_mb <= 0 && $url && strpos($url, '/uploads/apk/') !== false) {
-                $filePath = __DIR__ . parse_url($url, PHP_URL_PATH);
-                if (file_exists($filePath)) {
-                    $size_mb = round(filesize($filePath) / 1048576, 1);
+            if ($size_mb <= 0 && $url) {
+                if (strpos($url, '/uploads/apk/') !== false) {
+                    $filePath = __DIR__ . parse_url($url, PHP_URL_PATH);
+                    if (file_exists($filePath)) {
+                        $size_mb = round(filesize($filePath) / 1048576, 1);
+                    }
+                } elseif (strpos($url, S3_PUBLIC_URL) === 0 || strpos($url, S3_ENDPOINT) === 0) {
+                    // S3 对象: HEAD 请求拿 Content-Length (不下载)
+                    $ch = curl_init($url);
+                    curl_setopt_array($ch, [
+                        CURLOPT_NOBODY => true,
+                        CURLOPT_RETURNTRANSFER => true,
+                        CURLOPT_CONNECTTIMEOUT => 10,
+                        CURLOPT_TIMEOUT => 30,
+                    ]);
+                    curl_exec($ch);
+                    $len = curl_getinfo($ch, CURLINFO_CONTENT_LENGTH_DOWNLOAD);
+                                    if ($len > 0) $size_mb = round($len / 1048576, 1);
                 }
             }
             // 发布日期: 未填时默认当天
@@ -376,7 +594,7 @@ try {
                 'banner_text' => '风铃分享库 · 官方频道',
                 'banner_sub' => '最新软件 · 更新通知 · 交流反馈',
             ];
-            json_out(array_merge($defaults, $cfg), 0, 'ok', 600);
+            json_out(array_merge($defaults, $cfg));
 
         case 'about_config_set':
             require_admin();
@@ -421,7 +639,7 @@ try {
                 'force_update' => $force_update,
                 'size_mb' => $size_mb,
                 'release_date' => $release_date,
-            ], 0, 'ok', 600);
+            ]);
 
         // ============ 投稿名单 (公开: 只返回头像/昵称/说明, 绝不暴露 QQ 号) ============
         case 'contributors':
@@ -450,7 +668,7 @@ try {
             }
             $result = [];
             foreach ($order as $qq) $result[] = $map[$qq];
-            json_out($result, 0, 'ok', 120);
+            json_out($result);
 
         case 'contributor_create':
             require_admin();
@@ -513,7 +731,7 @@ try {
             }
             $result = [];
             foreach ($order as $qq) $result[] = $map[$qq];
-            json_out($result, 0, 'ok', 30);
+            json_out($result);
 
         // ============ 公告 ============
         case 'notice_get':
@@ -525,7 +743,7 @@ try {
                 'mode' => 'daily',   // daily=每日显示一次, every=每次打开显示
                 'enabled' => 0,      // 1=启用公告
             ];
-            json_out(array_merge($defaults, $cfg), 0, 'ok', 60);
+            json_out(array_merge($defaults, $cfg));
 
         case 'notice_set':
             require_admin();
@@ -537,6 +755,27 @@ try {
             db()->prepare("INSERT INTO settings (`key`, `value`) VALUES ('notice', ?)
                            ON DUPLICATE KEY UPDATE `value` = ?")->execute([$cfg, $cfg]);
             json_out(null);
+
+        case 'crash_report':
+            // 崩溃日志上报 (App 端匿名提交, 无需登录; 提交时堆栈截断防刷库)
+            $stack = (string)param('stack', '');
+            if (mb_strlen($stack) > 20000) $stack = mb_substr($stack, 0, 20000);
+            if ($stack === '') json_error('stack 为空', 400);
+            db()->prepare("INSERT INTO crash_reports (device, android_version, app_version, stack, ip) VALUES (?, ?, ?, ?, ?)")
+                ->execute([
+                    mb_substr((string)param('device', ''), 0, 100),
+                    mb_substr((string)param('android_version', ''), 0, 30),
+                    mb_substr((string)param('app_version', ''), 0, 30),
+                    $stack,
+                    client_ip(),
+                ]);
+            json_out(null);
+
+        case 'crash_reports':
+            // 崩溃日志列表 (管理端)
+            require_admin();
+            $rows = db()->query("SELECT * FROM crash_reports ORDER BY id DESC LIMIT 100")->fetchAll();
+            json_out($rows);
 
         default:
             json_error('未知操作: ' . $action, 404);
@@ -556,9 +795,15 @@ function require_admin(): void
         $token = param('token', '');
     }
     if (!$token) json_error('未登录', 401);
-    $stmt = db()->prepare('SELECT id, role FROM users WHERE token = ? AND is_active = 1');
+    // 多会话: 优先查 sessions 表, 兼容旧 users.token
+    $stmt = db()->prepare('SELECT u.id, u.role FROM sessions s JOIN users u ON s.user_id = u.id WHERE s.token = ? AND u.is_active = 1');
     $stmt->execute([$token]);
     $user = $stmt->fetch();
+    if (!$user) {
+        $stmt = db()->prepare('SELECT id, role FROM users WHERE token = ? AND is_active = 1');
+        $stmt->execute([$token]);
+        $user = $stmt->fetch();
+    }
     if (!$user) json_error('登录已失效', 401);
 }
 
@@ -573,6 +818,10 @@ function is_admin(): bool
         $token = param('token', '');
     }
     if (!$token) return false;
+    // 多会话: 优先 sessions 表, 兼容旧 users.token
+    $stmt = db()->prepare('SELECT u.id FROM sessions s JOIN users u ON s.user_id = u.id WHERE s.token = ? AND u.is_active = 1');
+    $stmt->execute([$token]);
+    if ($stmt->fetch()) return true;
     $stmt = db()->prepare('SELECT id FROM users WHERE token = ? AND is_active = 1');
     $stmt->execute([$token]);
     return (bool)$stmt->fetch();

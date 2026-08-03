@@ -119,3 +119,15 @@ PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 -- 默认版本配置 (后续通过管理端更新)
 INSERT IGNORE INTO `settings` (`key`, `value`) VALUES
 ('latest_version', '{"version":"1.0.0","url":"","update_log":""}');
+
+
+-- 崩溃日志上报 (App 端崩溃自动上传, 管理端「设置→崩溃」tab 查看)
+CREATE TABLE IF NOT EXISTS crash_reports (
+  id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  device VARCHAR(100) DEFAULT '',
+  android_version VARCHAR(30) DEFAULT '',
+  app_version VARCHAR(30) DEFAULT '',
+  stack TEXT,
+  ip VARCHAR(45) DEFAULT '',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

@@ -6,94 +6,129 @@
 <title>风铃分享库 - 管理后台</title>
 <script src="vue.global.prod.js"></script>
 <style>
-/* ===== Miuix 风格 (小米设计语言: 圆润/柔和/分层) ===== */
+/* ===== OShin 液态玻璃风格 (风铃管理后台) ===== */
 [v-cloak] { display: none !important; }
 * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 :root {
   --primary: #4C6FFF; --primary-soft: rgba(76,111,255,.12);
-  --bg: #F2F3F7; --card: #FFFFFF; --card2: #F7F8FC;
+  --bg: #EEF1FA; --card: rgba(255,255,255,.72); --card2: rgba(76,111,255,.06);
   --text: #1A1A2E; --text2: #8A8FA8;
   --danger: #F5455C; --success: #22B07D;
-  --radius: 16px; --radius-sm: 10px;
-  --shadow: 0 4px 20px rgba(30,40,90,.06);
-  --shadow-lg: 0 8px 32px rgba(30,40,90,.12);
+  --radius: 18px; --radius-sm: 12px;
+  --shadow: 0 8px 32px rgba(30,40,90,.08);
+  --shadow-lg: 0 16px 48px rgba(30,40,90,.14);
+  --glass: rgba(255,255,255,.65);
+  --glass-border: rgba(255,255,255,.65);
 }
-body { font-family: -apple-system, 'PingFang SC', 'MiSans', sans-serif; background: var(--bg); color: var(--text); }
-input, select, textarea { width: 100%; padding: 11px 14px; border: 1.5px solid #E8EAF2; border-radius: var(--radius-sm); font-size: 14px; outline: none; background: var(--card); transition: border .2s; }
-input:focus, textarea:focus { border-color: var(--primary); }
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0F1017; --card: rgba(255,255,255,.06); --card2: rgba(255,255,255,.04);
+    --text: #ECECF2; --text2: #9AA0B4;
+    --glass: rgba(28,30,42,.72);
+    --glass-border: rgba(255,255,255,.08);
+    --shadow: 0 8px 32px rgba(0,0,0,.4);
+    --shadow-lg: 0 16px 48px rgba(0,0,0,.55);
+  }
+}
+body { font-family: -apple-system, 'PingFang SC', 'MiSans', 'HarmonyOS Sans', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+/* 背景氛围光 */
+body::before { content: ''; position: fixed; inset: 0; z-index: -1; pointer-events: none;
+  background:
+    radial-gradient(560px 320px at 15% -5%, rgba(76,111,255,.16), transparent 70%),
+    radial-gradient(480px 300px at 95% 15%, rgba(124,77,255,.13), transparent 70%),
+    radial-gradient(420px 340px at 50% 105%, rgba(34,176,125,.09), transparent 70%);
+}
+input, select, textarea { width: 100%; padding: 12px 15px; border: 1.5px solid transparent; border-radius: var(--radius-sm); font-size: 15px; outline: none; background: var(--card2); color: var(--text); transition: border .2s, background .2s; }
+input:focus, textarea:focus { border-color: var(--primary); background: var(--card); }
+input::placeholder, textarea::placeholder { color: var(--text2); opacity: .7; }
 button { cursor: pointer; border: none; border-radius: var(--radius-sm); font-size: 14px; font-family: inherit; }
-/* 登录 */
-.login-page { min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 24px; background: linear-gradient(160deg, #EEF2FF 0%, var(--bg) 60%); }
-.login-logo { width: 76px; height: 76px; border-radius: 22px; background: linear-gradient(135deg, #4C6FFF, #7B5CFF); display: flex; align-items: center; justify-content: center; color: #fff; font-size: 38px; font-weight: 700; margin-bottom: 16px; box-shadow: 0 12px 30px rgba(76,111,255,.35); }
-.login-title { font-size: 22px; font-weight: 700; margin-bottom: 6px; }
-.login-sub { color: var(--text2); font-size: 13px; margin-bottom: 30px; }
-.login-card { width: 100%; max-width: 360px; background: var(--card); padding: 26px; border-radius: 22px; box-shadow: var(--shadow-lg); }
-.login-card input { margin-bottom: 12px; }
+/* ===== 登录页 ===== */
+.login-page { min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 24px; }
+.login-logo { width: 84px; height: 84px; border-radius: 24px; background: linear-gradient(135deg, #4C6FFF, #7B5CFF); display: flex; align-items: center; justify-content: center; color: #fff; font-size: 42px; font-weight: 700; margin-bottom: 18px; box-shadow: 0 16px 40px rgba(76,111,255,.4); position: relative; overflow: hidden; }
+.login-logo::after { content: ''; position: absolute; top: -30%; left: -30%; width: 70%; height: 70%; background: rgba(255,255,255,.25); border-radius: 50%; filter: blur(2px); }
+.login-title { font-size: 24px; font-weight: 800; margin-bottom: 4px; letter-spacing: 1px; }
+.login-sub { color: var(--text2); font-size: 13px; margin-bottom: 32px; }
+.login-card { width: 100%; max-width: 380px; background: var(--glass); backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px); padding: 30px 26px; border-radius: 26px; box-shadow: var(--shadow-lg); border: 1px solid var(--glass-border); }
+.login-card input { margin-bottom: 14px; }
 .login-err { color: var(--danger); font-size: 13px; margin-bottom: 10px; text-align: center; }
-/* 顶栏 */
-.admin-page { padding-bottom: 100px; }
-.topbar { position: sticky; top: 0; background: rgba(255,255,255,.92); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); padding: 14px 16px; display: flex; align-items: center; gap: 10px; z-index: 10; }
-.topbar h1 { font-size: 18px; flex: 1; font-weight: 700; }
-.topbar .logout { background: none; color: var(--danger); font-size: 13px; }
-/* Tab 胶囊 */
-.tabs { display: flex; gap: 8px; padding: 10px 16px; background: var(--card); position: sticky; top: 52px; z-index: 9; }
-.tab { flex: 1; text-align: center; padding: 9px 0; font-size: 14px; color: var(--text2); background: var(--card2); border-radius: 12px; transition: all .2s; }
-.tab.active { color: #fff; background: var(--primary); font-weight: 600; box-shadow: 0 4px 14px rgba(76,111,255,.3); }
-/* 统计 */
-.stats { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 14px 16px; }
-.stat-card { background: var(--card); border-radius: var(--radius); padding: 16px; box-shadow: var(--shadow); }
-.stat-num { font-size: 26px; font-weight: 700; color: var(--primary); }
-.stat-label { font-size: 12px; color: var(--text2); margin-top: 3px; }
-/* 列表 */
+/* ===== 顶栏 ===== */
+.admin-page { padding-bottom: 108px; }
+.topbar { position: sticky; top: 0; background: var(--glass); backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px); padding: 16px 20px; display: flex; align-items: center; gap: 10px; z-index: 10; border-bottom: 1px solid var(--glass-border); }
+.topbar h1 { font-size: 19px; flex: 1; font-weight: 800; letter-spacing: .5px; }
+.topbar .user-chip { font-size: 12px; color: var(--text2); background: var(--card2); padding: 4px 12px; border-radius: 20px; }
+.topbar .logout { background: var(--card2); color: var(--danger); font-size: 13px; padding: 6px 14px; border-radius: 20px; }
+/* ===== 子 tab 胶囊 (页面内切换) ===== */
+.sub-tabs { display: flex; gap: 8px; padding: 14px 16px 4px; overflow-x: auto; scrollbar-width: none; }
+.sub-tabs::-webkit-scrollbar { display: none; }
+.sub-tab { flex-shrink: 0; padding: 9px 20px; font-size: 14px; color: var(--text2); background: var(--card); border: 1px solid var(--glass-border); border-radius: 14px; backdrop-filter: blur(16px); transition: all .2s; }
+.sub-tab.active { color: #fff; background: var(--primary); font-weight: 600; box-shadow: 0 6px 18px rgba(76,111,255,.35); }
+/* ===== 统计 ===== */
+.stats { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 14px 16px; }
+.stat-card { background: var(--card); backdrop-filter: blur(20px); border: 1px solid var(--glass-border); border-radius: var(--radius); padding: 18px; box-shadow: var(--shadow); position: relative; overflow: hidden; }
+.stat-card::before { content: ''; position: absolute; top: -40%; right: -20%; width: 80%; height: 80%; border-radius: 50%; background: linear-gradient(135deg, rgba(76,111,255,.14), rgba(124,77,255,.06)); }
+.stat-num { font-size: 30px; font-weight: 800; color: var(--primary); position: relative; }
+.stat-label { font-size: 12px; color: var(--text2); margin-top: 4px; position: relative; }
+.rank { width: 24px; height: 24px; border-radius: 8px; background: var(--card2); color: var(--primary); font-size: 13px; font-weight: 700; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.list-item:first-child .rank, .list-item:nth-child(2) .rank, .list-item:nth-child(3) .rank { background: linear-gradient(135deg, #4C6FFF, #7B5CFF); color: #fff; }
+/* ===== 区块 & 列表 ===== */
 .section { padding: 14px 16px; }
 .section-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
 .section-head h2 { font-size: 16px; font-weight: 700; }
-.list-item { background: var(--card); border-radius: var(--radius); padding: 14px; margin-bottom: 10px; box-shadow: var(--shadow); display: flex; align-items: center; gap: 12px; }
-.list-item .icon { width: 44px; height: 44px; border-radius: 12px; object-fit: cover; background: var(--card2); flex-shrink: 0; }
+.list-item { background: var(--card); backdrop-filter: blur(20px); border: 1px solid var(--glass-border); border-radius: var(--radius); padding: 15px; margin-bottom: 10px; box-shadow: var(--shadow); display: flex; align-items: center; gap: 12px; transition: transform .15s; }
+.list-item:active { transform: scale(.985); }
+.list-item .icon { width: 46px; height: 46px; border-radius: 14px; object-fit: cover; background: var(--card2); flex-shrink: 0; }
 .list-item .info { flex: 1; min-width: 0; }
 .list-item .name { font-size: 15px; font-weight: 600; }
 .list-item .meta { font-size: 12px; color: var(--text2); margin-top: 3px; }
 .list-item .ops { display: flex; gap: 8px; flex-shrink: 0; }
-/* 按钮 */
-.btn-primary { background: var(--primary); color: #fff; padding: 12px; width: 100%; font-weight: 600; border-radius: 12px; }
-.btn-ghost { background: var(--card2); color: var(--text); padding: 8px 16px; }
-.btn-danger { background: rgba(245,69,92,.1); color: var(--danger); padding: 7px 12px; font-size: 13px; border-radius: 9px; }
-.btn-sm { background: var(--primary-soft); color: var(--primary); padding: 7px 12px; font-size: 13px; border-radius: 9px; }
-.btn-green { background: rgba(34,176,125,.12); color: var(--success); padding: 7px 12px; font-size: 13px; border-radius: 9px; }
-/* 弹层 (底部滑出) */
-.modal-mask { position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 200; display: flex; align-items: flex-end; }
-.modal { width: 100%; background: var(--card); border-radius: 22px 22px 0 0; padding: 22px; max-height: 90vh; overflow-y: auto; animation: slideUp .28s cubic-bezier(.2,.8,.2,1); }
-@keyframes slideUp { from { transform: translateY(60px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
-.modal h3 { font-size: 17px; margin-bottom: 16px; font-weight: 700; }
-.form-group { margin-bottom: 12px; }
-.form-group label { display: block; font-size: 13px; color: var(--text2); margin-bottom: 6px; }
+/* ===== 按钮 ===== */
+.btn-primary { background: linear-gradient(135deg, #4C6FFF, #6E5CFF); color: #fff; padding: 13px; width: 100%; font-weight: 700; border-radius: 14px; box-shadow: 0 6px 20px rgba(76,111,255,.35); transition: transform .15s, box-shadow .15s; }
+.btn-primary:active { transform: scale(.98); box-shadow: 0 3px 10px rgba(76,111,255,.3); }
+.btn-ghost { background: var(--card2); color: var(--text); padding: 9px 16px; border: 1px solid var(--glass-border); }
+.btn-danger { background: rgba(245,69,92,.1); color: var(--danger); padding: 8px 13px; font-size: 13px; border-radius: 10px; }
+.btn-sm { background: var(--primary-soft); color: var(--primary); padding: 8px 13px; font-size: 13px; border-radius: 10px; font-weight: 600; }
+.btn-green { background: rgba(34,176,125,.12); color: var(--success); padding: 8px 13px; font-size: 13px; border-radius: 10px; }
+/* ===== 弹层 (底部滑出玻璃) ===== */
+.modal-mask { position: fixed; inset: 0; background: rgba(10,12,25,.5); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); z-index: 200; display: flex; align-items: flex-end; }
+.modal { width: 100%; background: var(--glass); backdrop-filter: blur(28px); -webkit-backdrop-filter: blur(28px); border: 1px solid var(--glass-border); border-radius: 26px 26px 0 0; padding: 24px 22px calc(22px + env(safe-area-inset-bottom)); max-height: 90vh; overflow-y: auto; animation: slideUp .3s cubic-bezier(.2,.8,.2,1); }
+@keyframes slideUp { from { transform: translateY(80px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+.modal h3 { font-size: 18px; margin-bottom: 18px; font-weight: 800; }
+.form-group { margin-bottom: 14px; }
+.form-group label { display: block; font-size: 12.5px; color: var(--text2); margin-bottom: 7px; font-weight: 500; }
 .form-row { display: flex; gap: 10px; }
-.form-row > div { flex: 1; }
-.modal-btns { display: flex; gap: 10px; margin-top: 18px; }
+.form-row > div { flex: 1; min-width: 0; }
+.modal-btns { display: flex; gap: 10px; margin-top: 20px; }
 .modal-btns .btn-primary, .modal-btns .btn-ghost { flex: 1; }
-.empty { text-align: center; color: var(--text2); padding: 40px 0; font-size: 14px; }
-.fab { position: fixed; right: 20px; bottom: 28px; width: 54px; height: 54px; border-radius: 50%; background: var(--primary); color: #fff; font-size: 28px; box-shadow: 0 8px 24px rgba(76,111,255,.45); z-index: 50; display: flex; align-items: center; justify-content: center; }
-/* 网盘链接 */
-.link-item { display: flex; align-items: center; gap: 10px; padding: 12px; background: var(--card2); border-radius: var(--radius-sm); margin-bottom: 8px; }
+.empty { text-align: center; color: var(--text2); padding: 44px 0; font-size: 14px; }
+/* ===== 底部玻璃导航 ===== */
+.bottom-nav { position: fixed; left: 14px; right: 14px; bottom: calc(12px + env(safe-area-inset-bottom)); background: var(--glass); backdrop-filter: blur(28px); -webkit-backdrop-filter: blur(28px); border: 1px solid var(--glass-border); border-radius: 24px; box-shadow: var(--shadow-lg); display: flex; padding: 7px; z-index: 100; }
+.bottom-nav button { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 8px 0 7px; border-radius: 18px; font-size: 10.5px; color: var(--text2); background: transparent; transition: all .2s; }
+.bottom-nav button .ic { font-size: 21px; line-height: 1; filter: grayscale(.6); opacity: .75; transition: all .2s; }
+.bottom-nav button.active { color: var(--primary); font-weight: 700; background: var(--primary-soft); }
+.bottom-nav button.active .ic { filter: none; opacity: 1; transform: translateY(-1px); }
+.fab { position: fixed; right: 20px; bottom: calc(96px + env(safe-area-inset-bottom)); width: 56px; height: 56px; border-radius: 50%; background: linear-gradient(135deg, #4C6FFF, #7B5CFF); color: #fff; font-size: 30px; box-shadow: 0 10px 28px rgba(76,111,255,.45); z-index: 50; display: flex; align-items: center; justify-content: center; }
+/* ===== 网盘链接 ===== */
+.link-item { display: flex; align-items: center; gap: 10px; padding: 13px; background: var(--card2); border-radius: var(--radius-sm); margin-bottom: 8px; }
 .link-item .info { flex: 1; min-width: 0; font-size: 13px; }
 .link-item .info .u { color: var(--text2); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-/* 图片上传 */
-.upload-box { width: 100%; height: 120px; border: 2px dashed #D8DBE8; border-radius: var(--radius-sm); display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--text2); font-size: 13px; cursor: pointer; overflow: hidden; background: var(--card2); position: relative; }
+/* ===== 图片上传 ===== */
+.upload-box { width: 100%; height: 120px; border: 2px dashed rgba(120,130,160,.35); border-radius: var(--radius-sm); display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--text2); font-size: 13px; cursor: pointer; overflow: hidden; background: var(--card2); position: relative; transition: border .2s; }
+.upload-box:hover, .upload-box:active { border-color: var(--primary); }
 .upload-box img { width: 100%; height: 100%; object-fit: cover; }
-.upload-box .up-tip { position: absolute; bottom: 0; left: 0; right: 0; background: rgba(0,0,0,.5); color: #fff; font-size: 11px; text-align: center; padding: 4px; }
-/* 小徽章 */
-.badge { display: inline-block; padding: 2px 8px; border-radius: 8px; font-size: 11px; background: var(--primary-soft); color: var(--primary); margin-left: 6px; }
+.upload-box .up-tip { position: absolute; bottom: 0; left: 0; right: 0; background: rgba(0,0,0,.55); color: #fff; font-size: 11px; text-align: center; padding: 4px; }
+/* ===== 徽章 ===== */
+.badge { display: inline-block; padding: 2px 8px; border-radius: 8px; font-size: 11px; background: var(--primary-soft); color: var(--primary); margin-left: 6px; font-weight: 600; }
 .badge-pack { background: rgba(124,77,255,.12); color: #7C4DFF; }
 .badge-off { background: rgba(138,143,168,.12); color: var(--text2); }
-/* Toast */
-.toast { position: fixed; top: 20px; left: 50%; transform: translateX(-50%); background: rgba(26,26,46,.88); color: #fff; padding: 10px 20px; border-radius: 12px; font-size: 13px; z-index: 999; animation: fadeIn .2s; }
-@keyframes fadeIn { from { opacity: 0; transform: translate(-50%, -10px); } to { opacity: 1; transform: translate(-50%, 0); } }
-/* 富文本编辑器 (公告) */
-.editor-toolbar { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px; background: var(--card2); border: 1.5px solid #E8EAF2; border-bottom: none; border-radius: var(--radius-sm) var(--radius-sm) 0 0; }
-.etb { width: 36px; height: 34px; display: flex; align-items: center; justify-content: center; background: var(--card); border: 1px solid #E8EAF2; border-radius: 8px; font-size: 14px; color: var(--text); }
+/* ===== Toast ===== */
+.toast { position: fixed; top: 22px; left: 50%; transform: translateX(-50%); background: rgba(20,22,38,.92); backdrop-filter: blur(12px); color: #fff; padding: 11px 22px; border-radius: 14px; font-size: 13px; z-index: 999; animation: fadeIn .25s; box-shadow: 0 8px 24px rgba(0,0,0,.25); }
+@keyframes fadeIn { from { opacity: 0; transform: translate(-50%, -12px); } to { opacity: 1; transform: translate(-50%, 0); } }
+/* ===== 富文本编辑器 ===== */
+.editor-toolbar { display: flex; flex-wrap: wrap; gap: 6px; padding: 9px; background: var(--card2); border: 1.5px solid transparent; border-bottom: none; border-radius: var(--radius-sm) var(--radius-sm) 0 0; }
+.etb { width: 38px; height: 36px; display: flex; align-items: center; justify-content: center; background: var(--card); border: 1px solid var(--glass-border); border-radius: 9px; font-size: 14px; color: var(--text); }
 .etb:active { background: var(--primary-soft); }
-.etb-color { width: 36px; height: 34px; padding: 0; border: 1px solid #E8EAF2; border-radius: 8px; background: var(--card); cursor: pointer; }
-.editor-area { min-height: 160px; max-height: 320px; overflow-y: auto; background: var(--card); border: 1.5px solid #E8EAF2; border-radius: 0 0 var(--radius-sm) var(--radius-sm); padding: 12px 14px; font-size: 14px; line-height: 1.7; outline: none; }
+.etb-color { width: 38px; height: 36px; padding: 0; border: 1px solid var(--glass-border); border-radius: 9px; background: var(--card); cursor: pointer; }
+.editor-area { min-height: 160px; max-height: 320px; overflow-y: auto; background: var(--card2); border: 1.5px solid transparent; border-radius: 0 0 var(--radius-sm) var(--radius-sm); padding: 13px 15px; font-size: 14px; line-height: 1.7; outline: none; }
 .editor-area:focus { border-color: var(--primary); }
 .editor-area img { max-width: 100%; border-radius: 8px; }
 .editor-area a { color: var(--primary); }
@@ -124,20 +159,19 @@ button { cursor: pointer; border: none; border-radius: var(--radius-sm); font-si
   <div v-else class="admin-page">
     <div class="topbar">
       <h1>风铃分享库</h1>
-      <span style="font-size:13px;color:var(--text2);">{{user}}</span>
+      <span class="user-chip">{{user}}</span>
       <button class="logout" @click="logout">退出</button>
     </div>
 
-    <div class="tabs">
-      <button class="tab" :class="{active: tab==='stats'}" @click="switchTab('stats')">统计</button>
-      <button class="tab" :class="{active: tab==='apps'}" @click="switchTab('apps')">软件</button>
-      <button class="tab" :class="{active: tab==='banners'}" @click="switchTab('banners')">轮播</button>
-      <button class="tab" :class="{active: tab==='cats'}" @click="switchTab('cats')">分类</button>
-      <button class="tab" :class="{active: tab==='version'}" @click="switchTab('version')">发布</button>
-      <button class="tab" :class="{active: tab==='about'}" @click="switchTab('about')">关于</button>
-      <button class="tab" :class="{active: tab==='contrib'}" @click="switchTab('contrib')">投稿</button>
-      <button class="tab" :class="{active: tab==='notice'}" @click="switchTab('notice')">公告</button>
-    </div>
+    <!-- 主内容 (按底部导航分组) -->
+    <div class="content-wrap">
+
+    <!-- 发布组 (版本 + 公告) -->
+    <div v-if="mainTab==='publish'">
+      <div class="sub-tabs">
+        <button class="sub-tab" :class="{active: tab==='version'}" @click="switchTab('version')">📦 版本发布</button>
+        <button class="sub-tab" :class="{active: tab==='notice'}" @click="switchTab('notice')">📢 公告</button>
+      </div>
 
     <!-- 版本发布 -->
     <div v-if="tab==='version'" class="section">
@@ -175,6 +209,56 @@ button { cursor: pointer; border: none; border-radius: var(--radius-sm); font-si
         <button class="btn-ghost" @click="loadVersion">重置</button>
       </div>
     </div>
+
+
+    <!-- 公告配置 -->
+    <div v-if="tab==='notice'" class="section">
+      <div class="section-head"><h2>公告设置</h2></div>
+      <div class="form-group"><label>公告内容 (富文本编辑器, 支持加粗/颜色/链接/图片)</label>
+        <div class="editor-toolbar">
+          <button type="button" class="etb" @click="execCmd('bold')" title="加粗"><b>B</b></button>
+          <button type="button" class="etb" @click="execCmd('italic')" title="斜体"><i>I</i></button>
+          <button type="button" class="etb" @click="execCmd('underline')" title="下划线"><u>U</u></button>
+          <button type="button" class="etb" @click="execCmd('insertUnorderedList')" title="无序列表">•≡</button>
+          <button type="button" class="etb" @click="execCmd('insertOrderedList')" title="有序列表">1≡</button>
+          <button type="button" class="etb" @click="insertLink" title="插入链接">🔗</button>
+          <button type="button" class="etb" @click="insertNoticeImage" title="插入图片">🖼</button>
+          <input type="color" value="#4C6FFF" class="etb-color" @change="execCmd('foreColor', $event.target.value)" title="文字颜色">
+          <button type="button" class="etb" @click="execCmd('removeFormat')" title="清除格式">T̶</button>
+        </div>
+        <div contenteditable="true" class="editor-area" id="noticeEditor" @input="onNoticeInput" placeholder="输入公告内容..."></div>
+        <div style="font-size:11px;color:var(--text2);margin-top:4px;">链接需以 http:// 或 https:// 开头, App 端点击链接会打开内置浏览器。</div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label>显示频率</label>
+          <select v-model="noticeForm.mode">
+            <option value="daily">每日显示一次</option>
+            <option value="every">每次打开都显示</option>
+          </select>
+        </div>
+        <div class="form-group"><label>状态</label>
+          <select v-model="noticeForm.enabled">
+            <option :value="1">✅ 启用</option>
+            <option :value="0">停用</option>
+          </select>
+        </div>
+      </div>
+      <div style="font-size:12px;color:var(--text2);margin-bottom:14px;">App 端会显示「今日不再提示」复选框, 勾选后当天不再弹出 (每日模式下)。</div>
+      <div class="modal-btns">
+        <button class="btn-primary" @click="saveNotice">保存公告</button>
+        <button class="btn-ghost" @click="loadNotice">重置</button>
+      </div>
+    </div>
+
+    </div>
+
+    <!-- 设置组 (关于 + 投稿) -->
+    <div v-if="mainTab==='settings'">
+      <div class="sub-tabs">
+        <button class="sub-tab" :class="{active: tab==='about'}" @click="switchTab('about')">⚙️ 关于</button>
+        <button class="sub-tab" :class="{active: tab==='contrib'}" @click="switchTab('contrib')">🙋 投稿</button>
+        <button class="sub-tab" :class="{active: tab==='crash'}" @click="switchTab('crash')">💥 崩溃</button>
+      </div>
 
     <!-- 关于配置 -->
     <div v-if="tab==='about'" class="section">
@@ -219,6 +303,7 @@ button { cursor: pointer; border: none; border-radius: var(--radius-sm); font-si
         <button class="btn-sm" @click="editContributor(c)">改</button>
         <button class="btn-danger" @click="delContributor(c)">删除</button>
       </div>
+          </div>
       <!-- 投稿人编辑弹层 -->
       <div v-if="showContrib" class="modal-mask" @click.self="showContrib=false">
         <div class="modal">
@@ -234,53 +319,58 @@ button { cursor: pointer; border: none; border-radius: var(--radius-sm); font-si
       </div>
     </div>
 
-    <!-- 公告配置 -->
-    <div v-if="tab==='notice'" class="section">
-      <div class="section-head"><h2>公告设置</h2></div>
-      <div class="form-group"><label>公告内容 (富文本编辑器, 支持加粗/颜色/链接/图片)</label>
-        <div class="editor-toolbar">
-          <button type="button" class="etb" @click="execCmd('bold')" title="加粗"><b>B</b></button>
-          <button type="button" class="etb" @click="execCmd('italic')" title="斜体"><i>I</i></button>
-          <button type="button" class="etb" @click="execCmd('underline')" title="下划线"><u>U</u></button>
-          <button type="button" class="etb" @click="execCmd('insertUnorderedList')" title="无序列表">•≡</button>
-          <button type="button" class="etb" @click="execCmd('insertOrderedList')" title="有序列表">1≡</button>
-          <button type="button" class="etb" @click="insertLink" title="插入链接">🔗</button>
-          <button type="button" class="etb" @click="insertNoticeImage" title="插入图片">🖼</button>
-          <input type="color" value="#4C6FFF" class="etb-color" @change="execCmd('foreColor', $event.target.value)" title="文字颜色">
-          <button type="button" class="etb" @click="execCmd('removeFormat')" title="清除格式">T̶</button>
-        </div>
-        <div contenteditable="true" class="editor-area" id="noticeEditor" @input="onNoticeInput" placeholder="输入公告内容..."></div>
-        <div style="font-size:11px;color:var(--text2);margin-top:4px;">链接需以 http:// 或 https:// 开头, App 端点击链接会打开内置浏览器。</div>
+
+    <!-- 崩溃日志 -->
+    <div v-if="tab==='crash'" class="section">
+      <div class="section-head"><h2>崩溃日志</h2>
+        <button class="btn-sm" style="padding:0 20px;font-size:14px;" @click="loadCrashReports">🔄 刷新</button>
       </div>
-      <div class="form-row">
-        <div class="form-group"><label>显示频率</label>
-          <select v-model="noticeForm.mode">
-            <option value="daily">每日显示一次</option>
-            <option value="every">每次打开都显示</option>
-          </select>
+      <div style="font-size:12px;color:var(--text2);margin-bottom:14px;">App 端每次启动会把上次崩溃的堆栈自动上传到这里 (含设备/系统/App 版本)。</div>
+      <div v-if="!crashes.length" class="empty">暂无崩溃上报</div>
+      <div v-for="c in crashes" :key="c.id" class="list-item" style="align-items:flex-start;">
+        <div class="info" style="flex:1;min-width:0;">
+          <div class="name">{{c.device || '未知设备'}} <span style="font-weight:normal;font-size:12px;color:var(--text2);">Android {{c.android_version || '?'}} · v{{c.app_version || '?'}} · {{c.created_at}}</span></div>
+          <details style="margin-top:6px;">
+            <summary style="cursor:pointer;color:var(--primary);font-size:13px;">查看堆栈 ({{c.stack.split('\n').length}} 行)</summary>
+            <pre style="background:#f5f5f7;border-radius:8px;padding:10px;font-size:11px;line-height:1.5;overflow:auto;max-height:280px;white-space:pre-wrap;word-break:break-all;color:#333;">{{c.stack}}</pre>
+          </details>
         </div>
-        <div class="form-group"><label>状态</label>
-          <select v-model="noticeForm.enabled">
-            <option :value="1">✅ 启用</option>
-            <option :value="0">停用</option>
-          </select>
-        </div>
-      </div>
-      <div style="font-size:12px;color:var(--text2);margin-bottom:14px;">App 端会显示「今日不再提示」复选框, 勾选后当天不再弹出 (每日模式下)。</div>
-      <div class="modal-btns">
-        <button class="btn-primary" @click="saveNotice">保存公告</button>
-        <button class="btn-ghost" @click="loadNotice">重置</button>
       </div>
     </div>
 
     <!-- 统计 -->
-    <div v-if="tab==='stats'" class="stats">
+    <div v-if="mainTab==='stats'" class="stats">
       <div class="stat-card"><div class="stat-num">{{stats.total_apps}}</div><div class="stat-label">软件总数</div></div>
       <div class="stat-card"><div class="stat-num">{{stats.total_downloads}}</div><div class="stat-label">总下载量</div></div>
-      <div class="stat-card"><div class="stat-num">{{stats.total_clicks}}</div><div class="stat-label">总点击</div></div>
-      <div class="stat-card"><div class="stat-num">{{stats.today_clicks}}</div><div class="stat-label">今日点击</div></div>
+      <div class="stat-card"><div class="stat-num">{{stats.total_clicks}}</div><div class="stat-label">总打开</div></div>
+      <div class="stat-card"><div class="stat-num">{{stats.today_clicks}}</div><div class="stat-label">今日打开</div></div>
       <div class="section" style="grid-column: span 2;">
-        <div class="section-head"><h2>热门链接</h2></div>
+        <div class="section-head">
+          <h2>📊 软件打开排行 (总榜)</h2>
+          <button class="btn-sm" @click="loadStats">↻ 刷新</button>
+        </div>
+        <div v-if="!stats.top_apps || !stats.top_apps.length" class="empty">暂无数据</div>
+        <div v-for="(a, ai) in stats.top_apps" :key="a.id" class="list-item">
+          <div class="rank">{{ai+1}}</div>
+          <img v-if="a.icon" :src="a.icon" class="icon" style="width:38px;height:38px;border-radius:10px;">
+          <div v-else class="icon" style="width:38px;height:38px;border-radius:10px;display:flex;align-items:center;justify-content:center;color:var(--primary);font-weight:700;font-size:15px;">{{(a.name||'?')[0]}}</div>
+          <div class="info"><div class="name">{{a.name}}</div></div>
+          <div class="meta"><b style="color:var(--primary);font-size:16px;">{{a.cnt}}</b> 次</div>
+        </div>
+      </div>
+      <div class="section" style="grid-column: span 2;">
+        <div class="section-head"><h2>🔥 今日打开排行</h2></div>
+        <div v-if="!stats.top_apps_today || !stats.top_apps_today.length" class="empty">今日暂无数据</div>
+        <div v-for="(a, ai) in stats.top_apps_today" :key="'t'+a.id" class="list-item">
+          <div class="rank">{{ai+1}}</div>
+          <img v-if="a.icon" :src="a.icon" class="icon" style="width:38px;height:38px;border-radius:10px;">
+          <div v-else class="icon" style="width:38px;height:38px;border-radius:10px;display:flex;align-items:center;justify-content:center;color:var(--primary);font-weight:700;font-size:15px;">{{(a.name||'?')[0]}}</div>
+          <div class="info"><div class="name">{{a.name}}</div></div>
+          <div class="meta"><b style="color:var(--primary);font-size:16px;">{{a.cnt}}</b> 次</div>
+        </div>
+      </div>
+      <div class="section" style="grid-column: span 2;">
+        <div class="section-head"><h2>🔗 热门网盘链接</h2></div>
         <div v-if="!stats.top_links || !stats.top_links.length" class="empty">暂无数据</div>
         <div v-for="l in stats.top_links" :key="l.id" class="list-item">
           <div class="info"><div class="name">{{l.label}}</div></div>
@@ -288,6 +378,14 @@ button { cursor: pointer; border: none; border-radius: var(--radius-sm); font-si
         </div>
       </div>
     </div>
+
+    <!-- 软件组 (软件 + 轮播 + 分类) -->
+    <div v-if="mainTab==='apps'">
+      <div class="sub-tabs">
+        <button class="sub-tab" :class="{active: tab==='apps'}" @click="switchTab('apps')">📱 软件</button>
+        <button class="sub-tab" :class="{active: tab==='banners'}" @click="switchTab('banners')">🖼 轮播</button>
+        <button class="sub-tab" :class="{active: tab==='cats'}" @click="switchTab('cats')">🗂 分类</button>
+      </div>
 
     <!-- 软件管理 -->
     <div v-if="tab==='apps'" class="section">
@@ -335,6 +433,8 @@ button { cursor: pointer; border: none; border-radius: var(--radius-sm); font-si
         </div>
       </div>
       <button class="fab" @click="editCat()">+</button>
+    </div>
+
     </div>
 
     <!-- 软件编辑弹层 -->
@@ -485,6 +585,15 @@ button { cursor: pointer; border: none; border-radius: var(--radius-sm); font-si
         </div>
       </div>
     </div>
+    </div>
+
+    <!-- 底部玻璃导航 -->
+    <div class="bottom-nav">
+      <button :class="{active: mainTab==='stats'}" @click="setMain('stats')"><span class="ic">📊</span><span>统计</span></button>
+      <button :class="{active: mainTab==='apps'}" @click="setMain('apps')"><span class="ic">📱</span><span>软件</span></button>
+      <button :class="{active: mainTab==='publish'}" @click="setMain('publish')"><span class="ic">📢</span><span>发布</span></button>
+      <button :class="{active: mainTab==='settings'}" @click="setMain('settings')"><span class="ic">⚙️</span><span>设置</span></button>
+    </div>
   </div>
 </div>
 </script>
@@ -505,6 +614,7 @@ createApp({
       token: store.token,
       username: '', password: '', loginErr: '',
       user: store.user,
+      mainTab: 'stats',
       tab: 'stats',
       stats: {}, apps: [], cats: [], banners: [],
       showApp: false, showBanner: false, showCat: false,
@@ -522,10 +632,16 @@ createApp({
       showContrib: false,
       contribForm: { id: 0, qq: '', name: '', bio: '', sort_order: 0 },
       aboutForm: { qq_group: '', qq_key: '', qq_url: '', website: '', github: '', feedback: '', donate: '', banner_text: '风铃分享库 · 官方频道', banner_sub: '最新软件 · 更新通知 · 交流反馈' },
+      crashes: [],
     };
   },
   mounted() {
     if (this.token) { this.loadStats(); this.loadCats(); this.loadBanners(); }
+  },
+  created() {
+    // 恢复上次所在主 tab (localStorage)
+    const saved = localStorage.getItem('fl_mainTab');
+    if (saved && ['stats','apps','publish','settings'].includes(saved)) this.mainTab = saved;
   },
   methods: {
     async api(action, params = {}, method = 'GET') {
@@ -535,6 +651,8 @@ createApp({
         opt.headers['Content-Type'] = 'application/json';
         opt.body = JSON.stringify(params);
       } else {
+        // GET 请求加时间戳, 防止浏览器 HTTP 强缓存返回旧数据 (改完刷新还是旧值问题)
+        url += '&_=' + Date.now();
         const qs = new URLSearchParams(params).toString();
         if (qs) url += '&' + qs;
       }
@@ -563,6 +681,11 @@ createApp({
     },
     switchTab(t) {
       this.tab = t;
+      // 子 tab 联动主 tab
+      if (['stats'].includes(t)) this.mainTab = 'stats';
+      if (['apps','banners','cats'].includes(t)) this.mainTab = 'apps';
+      if (['version','notice'].includes(t)) this.mainTab = 'publish';
+      if (['about','contrib','crash'].includes(t)) this.mainTab = 'settings';
       if (t === 'stats') this.loadStats();
       if (t === 'apps') this.loadApps();
       if (t === 'banners') this.loadBanners();
@@ -571,6 +694,26 @@ createApp({
       if (t === 'about') this.loadAbout();
       if (t === 'notice') this.loadNotice();
       if (t === 'contrib') this.loadContributors();
+      if (t === 'crash') this.loadCrashReports();
+    },
+    // 底部导航主 tab 切换
+    setMain(m) {
+      this.mainTab = m;
+      localStorage.setItem('fl_mainTab', m);
+      if (m === 'stats') {
+        this.tab = 'stats';
+        // 已有数据不再重复请求 (统计页刷新难受问题); 手动点刷新按钮才重拉
+        if (!this.stats || !this.stats.total_apps) this.loadStats();
+      }
+      else if (m === 'apps') { if (!['apps','banners','cats'].includes(this.tab)) this.tab = 'apps'; this.loadApps(); }
+      else if (m === 'publish') { if (!['version','notice'].includes(this.tab)) this.tab = 'version'; this.loadVersion(); }
+      else if (m === 'settings') { if (!['about','contrib','crash'].includes(this.tab)) this.tab = 'about'; this.loadAbout(); }
+    },
+    async loadCrashReports() {
+      try {
+        const r = await this.api('crash_reports', {}, 'POST');
+        if (r.code === 0) this.crashes = r.data || [];
+      } catch (e) { this.toast('崩溃日志加载失败'); }
     },
     async loadContributors() {
       try {
@@ -769,7 +912,14 @@ createApp({
       }
     },
     logout() { store.token = ''; this.token = ''; store.user = ''; this.user = ''; },
-    async loadStats() { const r = await this.api('stats'); if (r.code === 0) this.stats = r.data; },
+    async loadStats() {
+      if (this._statsLoading) return; // 防止重复请求
+      this._statsLoading = true;
+      try {
+        const r = await this.api('stats');
+        if (r.code === 0) this.stats = r.data;
+      } finally { this._statsLoading = false; }
+    },
     async loadApps() { const r = await fetch('api.php?action=apps&_=' + Date.now(), { headers: { 'Authorization': 'Bearer ' + this.token } }).then(x => x.json()); if (r.code === 0) this.apps = r.data; },
     async loadBanners() { const r = await fetch('api.php?action=banners&_=' + Date.now()).then(x => x.json()); if (r.code === 0) this.banners = r.data; },
     async loadCats() { const r = await fetch('api.php?action=categories&_=' + Date.now()).then(x => x.json()); if (r.code === 0) this.cats = r.data; },
