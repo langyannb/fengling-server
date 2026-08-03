@@ -131,3 +131,12 @@ CREATE TABLE IF NOT EXISTS crash_reports (
   ip VARCHAR(45) DEFAULT '',
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 软件新版本标志 + 发布日期 (2026-08-03)
+SET @col_exists = (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='flfxk' AND TABLE_NAME='apps' AND COLUMN_NAME='release_date');
+SET @sql = IF(@col_exists = 0, 'ALTER TABLE apps ADD COLUMN release_date DATE DEFAULT NULL AFTER version', 'SELECT 1');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @col_exists = (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='flfxk' AND TABLE_NAME='apps' AND COLUMN_NAME='is_new');
+SET @sql = IF(@col_exists = 0, 'ALTER TABLE apps ADD COLUMN is_new TINYINT DEFAULT 0 AFTER release_date', 'SELECT 1');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;

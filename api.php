@@ -258,6 +258,8 @@ try {
                 $app['pack_id'] = $app['pack_id'] ? (int)$app['pack_id'] : null;
                 $app['is_top'] = (int)$app['is_top'];
                 $app['is_featured'] = (int)$app['is_featured'];
+                $app['is_new'] = (int)$app['is_new'];
+                $app['release_date'] = $app['release_date'] ?: '';
                 // 介绍图片: JSON 数组 -> 数组
                 $app['screenshots'] = $app['screenshots'] ? (json_decode($app['screenshots'], true) ?: []) : [];
                 // 投稿人 QQ 属敏感字段, 仅管理员可见 (App 端一律不给)
@@ -295,6 +297,10 @@ try {
             $app['download_count'] = (int)$app['download_count'];
             $app['rating'] = (float)$app['rating'];
             $app['id'] = (int)$app['id'];
+            $app['is_top'] = (int)$app['is_top'];
+            $app['is_featured'] = (int)$app['is_featured'];
+            $app['is_new'] = (int)$app['is_new'];
+            $app['release_date'] = $app['release_date'] ?: '';
             // 介绍图片: JSON 数组 -> 数组
             $app['screenshots'] = $app['screenshots'] ? (json_decode($app['screenshots'], true) ?: []) : [];
             // 投稿人 QQ 属敏感字段, 仅管理员可见
@@ -309,18 +315,25 @@ try {
         case 'app_update':
             require_admin();
             $id = (int)param('id', 0);
-            $fields = ['name', 'category_id', 'icon', 'version', 'description', 'screenshots', 'package_name', 'rating', 'sort_order', 'is_active', 'pack_id', 'is_top', 'is_featured', 'contributor_qq'];
+            $fields = ['name', 'category_id', 'icon', 'version', 'description', 'screenshots', 'package_name', 'rating', 'sort_order', 'is_active', 'pack_id', 'is_top', 'is_featured', 'contributor_qq', 'release_date', 'is_new'];
+            // 灵活: 版本号变更且未显式传 is_new → 自动标记「新版本」(管理端可再手动关掉)
+            $st = db()->prepare('SELECT version FROM apps WHERE id = ?'); $st->execute([$id]);
+            $oldVer = $st->fetchColumn();
+            $newVer = param('version');
+            $forceNew = ($newVer !== null && $oldVer !== $newVer && param('is_new') === null);
             $sql = 'UPDATE apps SET ';
             $args = [];
             foreach ($fields as $f) {
                 $v = param($f);
                 if ($v !== null) {
                     if ($f === 'pack_id') { $sql .= "pack_id = ?, "; $args[] = (int)$v ?: null; }
-                    elseif ($f === 'is_top' || $f === 'is_featured') { $sql .= "$f = ?, "; $args[] = (int)$v ?: 0; }
+                    elseif ($f === 'is_top' || $f === 'is_featured' || $f === 'is_new') { $sql .= "$f = ?, "; $args[] = (int)$v ?: 0; }
+                    elseif ($f === 'release_date') { $sql .= "release_date = ?, "; $args[] = $v === '' ? null : $v; }
                     else { $sql .= "$f = ?, "; $args[] = $v; }
                 }
             }
-            if (!$args) json_error('没有要更新的字段');
+            if ($forceNew) { $sql .= 'is_new = 1, '; }
+            if (!$args && !$forceNew) json_error('没有要更新的字段');
             $sql = rtrim($sql, ', ') . ' WHERE id = ?';
             $args[] = $id;
             db()->prepare($sql)->execute($args);
@@ -834,8 +847,8 @@ function insert_app(): int
     if (!$name) json_error('软件名不能为空');
     $categoryId = (int)param('category_id', 0) ?: null;
     $packId = (int)param('pack_id', 0) ?: null;
-    db()->prepare('INSERT INTO apps (category_id, name, icon, version, description, screenshots, contributor_qq, package_name, rating, sort_order, pack_id, is_top, is_featured)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    db()->prepare('INSERT INTO apps (category_id, name, icon, version, description, screenshots, contributor_qq, package_name, rating, sort_order, pack_id, is_top, is_featured, release_date, is_new)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
         ->execute([
             $categoryId,
             $name,
@@ -850,6 +863,8 @@ function insert_app(): int
             $packId,
             (int)param('is_top', 0) ?: 0,
             (int)param('is_featured', 0) ?: 0,
+            param('release_date', '') ?: null,
+            (int)param('is_new', 0) ?: 0,
         ]);
     return (int)db()->lastInsertId();
 }
