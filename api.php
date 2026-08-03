@@ -325,20 +325,9 @@ try {
             require_admin();
             $id = (int)param('id', 0);
             $fields = ['name', 'category_id', 'icon', 'version', 'description', 'screenshots', 'package_name', 'rating', 'sort_order', 'is_active', 'pack_id', 'is_top', 'is_featured', 'contributor_qq', 'release_date'];
-            // 「新版本」规则: ①已有的软件版本号变更 → 自动标「新」3 天 (new_until = now+3天, 到期自动消失)
-            //            ②管理端显式传 new_flag (1=设新3天, 0=取消) → 以手动为准
-            //            ③新添加的软件不标新 (insert_app 不写 new_until)
-            $st = db()->prepare('SELECT version, release_date FROM apps WHERE id = ?'); $st->execute([$id]);
-            $oldRow = $st->fetch(PDO::FETCH_ASSOC);
-            $newVer = param('version');
-            $verChanged = ($newVer !== null && $newVer !== $oldRow['version']);
-            $newFlag = param('new_flag', null); // null=未显式操作, '1'=设新, '0'=取消
-            $autoNew = $verChanged && $newFlag === null;
-            // 发布日期: 版本变更且日期没被手动改 → 自动刷新为今天 (排序靠前+显示)
-            $rdParam = param('release_date');
-            $rdVal = ($rdParam === null || $rdParam === '') ? null : $rdParam;
-            $rdUnchanged = ($rdParam === null) || ($rdVal === ($oldRow['release_date'] ?: null));
-            $autoFresh = $verChanged && $rdUnchanged;
+            // 「新版本」完全手动控制: new_flag=1 → 标「新」3 天 (到期自动回普通); new_flag=0 → 立即取消; 不传 → 不动
+            // 改版本号等任何其他操作都不会自动标新
+            $newFlag = param('new_flag', null);
             $sql = 'UPDATE apps SET ';
             $args = [];
             foreach ($fields as $f) {
@@ -352,11 +341,8 @@ try {
             }
             if ($newFlag !== null) {
                 $sql .= (int)$newFlag ? 'new_until = DATE_ADD(NOW(), INTERVAL 3 DAY), ' : 'new_until = NULL, ';
-            } elseif ($autoNew) {
-                $sql .= 'new_until = DATE_ADD(NOW(), INTERVAL 3 DAY), ';
             }
-            if ($autoFresh) { $sql .= 'release_date = ?, '; $args[] = date('Y-m-d'); }
-            if (!$args && $newFlag === null && !$autoNew && !$autoFresh) json_error('没有要更新的字段');
+            if (!$args && $newFlag === null) json_error('没有要更新的字段');
             $sql = rtrim($sql, ', ') . ' WHERE id = ?';
             $args[] = $id;
             db()->prepare($sql)->execute($args);

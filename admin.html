@@ -454,7 +454,7 @@ button { cursor: pointer; border: none; border-radius: var(--radius-sm); font-si
               <option v-for="c in cats" :key="c.id" :value="c.id">{{c.name}}</option>
             </select>
           </div>
-          <div class="form-group"><label>版本 (改了自动标「新」3 天)</label><input v-model="appForm.version" placeholder="1.0"></div>
+          <div class="form-group"><label>版本</label><input v-model="appForm.version" placeholder="1.0"></div>
         </div>
         <div class="form-group"><label>包名</label><input v-model="appForm.package_name" placeholder="com.example.app"></div>
         <div class="form-group"><label>描述</label><textarea v-model="appForm.description" rows="3" placeholder="软件介绍"></textarea></div>
@@ -495,14 +495,14 @@ button { cursor: pointer; border: none; border-radius: var(--radius-sm); font-si
           <div class="form-group"><label>精选</label>
             <select v-model="appForm.is_featured"><option :value="1">⭐ 精选</option><option :value="0">非精选</option></select>
           </div>
-          <div class="form-group"><label>新版本标 (勾选=标新 3 天)</label>
+          <div class="form-group"><label>新版本标 (选新=3天后回普通)</label>
             <select v-model="appForm.is_new" @change="newFlagTouched = true">
               <option :value="1">✨ 标「新」</option><option :value="0">不标</option>
             </select>
           </div>
         </div>
         <div class="form-group"><label>投稿人 QQ (关于页头像, 不显示号码)</label><input v-model="appForm.contributor_qq" placeholder="QQ号, 可留空"></div>
-        <div class="form-tip">✨ 「新」标规则：<b>已有的软件改版本号 → 自动标「新」3 天</b>；也可手动勾选「新版本标」标新 3 天；到期自动消失。新添加的软件不会自动标新。</div>
+        <div class="form-tip">「新」标完全手动控制：选「✨ 标新」→ 3 天后自动回到普通；选「不标」→ 立即取消。改版本号不会自动标新。</div>
         <div class="form-group"><label>整合包 (选择后此软件作为整合包的子项)</label>
           <select v-model="appForm.pack_id">
             <option :value="null">独立软件</option>

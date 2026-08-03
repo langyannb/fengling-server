@@ -132,12 +132,12 @@ CREATE TABLE IF NOT EXISTS crash_reports (
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- 软件新版本标志 + 发布日期 (2026-08-03, 2026-08-03 修订为 new_until 到期制)
+-- 软件新版本标志 + 发布日期 (2026-08-03, 2026-08-03 修订为 new_until 到期制, 再修订为纯手动)
 -- 「新版本」= new_until 未过期 (is_new 动态 = new_until > NOW(), 不再手工写入)
---   规则:
---     ① 已有的软件版本号变更 → 自动标「新」3 天 (new_until = now+3天, 到期自动消失)
---     ② 管理端手动设置/取消 (new_flag=1 设新3天 / new_flag=0 取消) → 以手动为准, 手动设的同样 3 天自动消失
---     ③ 新添加的软件不标新 (insert_app 不写 new_until)
+--   规则 (纯手动, 无任何自动):
+--     ① 管理端「新版本标」选「新」→ new_until = now+3天, 3 天后自动回普通 (到期自动消失)
+--     ② 管理端选「不标」→ new_until = NULL, 立即取消
+--     ③ 改版本号/其他编辑操作 不会 自动标新; 新添加的软件也不自动标新
 --   排序: is_top DESC → 带「新」标的在前 → COALESCE(release_date, 创建日期) DESC (按时间, 最近更新的靠前) → id DESC
 SET @col_exists = (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='flfxk' AND TABLE_NAME='apps' AND COLUMN_NAME='release_date');
 SET @sql = IF(@col_exists = 0, 'ALTER TABLE apps ADD COLUMN release_date DATE DEFAULT NULL AFTER version', 'SELECT 1');
