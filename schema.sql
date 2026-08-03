@@ -133,6 +133,10 @@ CREATE TABLE IF NOT EXISTS crash_reports (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- 软件新版本标志 + 发布日期 (2026-08-03)
+-- 「新版本」= 最近 3 天内有更新 (含今天: release_date >= 今天-2天 时 App/管理端自动显示「新」标, 到期自动消失)
+--   规则: 新添加软件默认 release_date=今天; 版本号变更且发布日期未手动改 → release_date 自动刷新为今天
+--   排序: is_top DESC → 有 release_date 的在前 → release_date DESC (最近更新的靠前) → id DESC
+-- is_new 字段已废弃为动态计算 (查询时按 release_date 实时算, 不再手工写入)
 SET @col_exists = (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='flfxk' AND TABLE_NAME='apps' AND COLUMN_NAME='release_date');
 SET @sql = IF(@col_exists = 0, 'ALTER TABLE apps ADD COLUMN release_date DATE DEFAULT NULL AFTER version', 'SELECT 1');
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
@@ -140,3 +144,6 @@ PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 SET @col_exists = (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='flfxk' AND TABLE_NAME='apps' AND COLUMN_NAME='is_new');
 SET @sql = IF(@col_exists = 0, 'ALTER TABLE apps ADD COLUMN is_new TINYINT DEFAULT 0 AFTER release_date', 'SELECT 1');
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- 存量数据: 老软件没有发布日期 → 按创建日期补 (首次跑一次, 之后新增自动处理)
+UPDATE apps SET release_date = DATE(created_at) WHERE release_date IS NULL;

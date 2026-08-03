@@ -247,7 +247,8 @@ try {
                 $args[] = $categoryId;
             }
             if ($keyword !== '') { $sql .= ' AND a.name LIKE ?'; $args[] = '%' . $keyword . '%'; }
-            $sql .= ' ORDER BY a.is_top DESC, a.sort_order ASC, a.id DESC';
+            // 排序: 置顶优先 → 有发布/更新日期的在前 → 按日期倒序 (最近更新的靠前) → id 兜底
+            $sql .= ' ORDER BY a.is_top DESC, (a.release_date IS NOT NULL) DESC, a.release_date DESC, a.id DESC';
             $stmt = db()->prepare($sql);
             $stmt->execute($args);
             $apps = $stmt->fetchAll();
@@ -258,7 +259,8 @@ try {
                 $app['pack_id'] = $app['pack_id'] ? (int)$app['pack_id'] : null;
                 $app['is_top'] = (int)$app['is_top'];
                 $app['is_featured'] = (int)$app['is_featured'];
-                $app['is_new'] = (int)$app['is_new'];
+                // 「新版本」= 最近 3 天内有更新 (含今天, 按发布日期动态算, 到期自动消失)
+                $app['is_new'] = ($app['release_date'] && $app['release_date'] >= date('Y-m-d', strtotime('-2 days'))) ? 1 : 0;
                 $app['release_date'] = $app['release_date'] ?: '';
                 // 介绍图片: JSON 数组 -> 数组
                 $app['screenshots'] = $app['screenshots'] ? (json_decode($app['screenshots'], true) ?: []) : [];
@@ -299,7 +301,8 @@ try {
             $app['id'] = (int)$app['id'];
             $app['is_top'] = (int)$app['is_top'];
             $app['is_featured'] = (int)$app['is_featured'];
-            $app['is_new'] = (int)$app['is_new'];
+            // 「新版本」= 最近 3 天内有更新 (含今天, 动态算, 到期自动消失)
+            $app['is_new'] = ($app['release_date'] && $app['release_date'] >= date('Y-m-d', strtotime('-2 days'))) ? 1 : 0;
             $app['release_date'] = $app['release_date'] ?: '';
             // 介绍图片: JSON 数组 -> 数组
             $app['screenshots'] = $app['screenshots'] ? (json_decode($app['screenshots'], true) ?: []) : [];
@@ -315,25 +318,30 @@ try {
         case 'app_update':
             require_admin();
             $id = (int)param('id', 0);
-            $fields = ['name', 'category_id', 'icon', 'version', 'description', 'screenshots', 'package_name', 'rating', 'sort_order', 'is_active', 'pack_id', 'is_top', 'is_featured', 'contributor_qq', 'release_date', 'is_new'];
-            // 灵活: 版本号变更且未显式传 is_new → 自动标记「新版本」(管理端可再手动关掉)
-            $st = db()->prepare('SELECT version FROM apps WHERE id = ?'); $st->execute([$id]);
-            $oldVer = $st->fetchColumn();
+            $fields = ['name', 'category_id', 'icon', 'version', 'description', 'screenshots', 'package_name', 'rating', 'sort_order', 'is_active', 'pack_id', 'is_top', 'is_featured', 'contributor_qq', 'release_date'];
+            // 「新版本」规则: 版本变更且发布日期没被手动改 → 自动把发布日期刷新为今天 (App 端 3 天内显示「新」标, 到期自动消失)
+            $st = db()->prepare('SELECT version, release_date FROM apps WHERE id = ?'); $st->execute([$id]);
+            $oldRow = $st->fetch(PDO::FETCH_ASSOC);
             $newVer = param('version');
-            $forceNew = ($newVer !== null && $oldVer !== $newVer && param('is_new') === null);
+            $verChanged = ($newVer !== null && $newVer !== $oldRow['version']);
+            $rdParam = param('release_date');
+            $rdVal = ($rdParam === null || $rdParam === '') ? null : $rdParam;
+            // 未传日期 或 传的与库里相同 → 视为没手动改日期 (版本变更时自动刷新为今天)
+            $rdUnchanged = ($rdParam === null) || ($rdVal === ($oldRow['release_date'] ?: null));
+            $autoFresh = $verChanged && $rdUnchanged;
             $sql = 'UPDATE apps SET ';
             $args = [];
             foreach ($fields as $f) {
                 $v = param($f);
                 if ($v !== null) {
                     if ($f === 'pack_id') { $sql .= "pack_id = ?, "; $args[] = (int)$v ?: null; }
-                    elseif ($f === 'is_top' || $f === 'is_featured' || $f === 'is_new') { $sql .= "$f = ?, "; $args[] = (int)$v ?: 0; }
+                    elseif ($f === 'is_top' || $f === 'is_featured') { $sql .= "$f = ?, "; $args[] = (int)$v ?: 0; }
                     elseif ($f === 'release_date') { $sql .= "release_date = ?, "; $args[] = $v === '' ? null : $v; }
                     else { $sql .= "$f = ?, "; $args[] = $v; }
                 }
             }
-            if ($forceNew) { $sql .= 'is_new = 1, '; }
-            if (!$args && !$forceNew) json_error('没有要更新的字段');
+            if ($autoFresh) { $sql .= 'release_date = ?, '; $args[] = date('Y-m-d'); }
+            if (!$args) json_error('没有要更新的字段');
             $sql = rtrim($sql, ', ') . ' WHERE id = ?';
             $args[] = $id;
             db()->prepare($sql)->execute($args);
@@ -847,8 +855,8 @@ function insert_app(): int
     if (!$name) json_error('软件名不能为空');
     $categoryId = (int)param('category_id', 0) ?: null;
     $packId = (int)param('pack_id', 0) ?: null;
-    db()->prepare('INSERT INTO apps (category_id, name, icon, version, description, screenshots, contributor_qq, package_name, rating, sort_order, pack_id, is_top, is_featured, release_date, is_new)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    db()->prepare('INSERT INTO apps (category_id, name, icon, version, description, screenshots, contributor_qq, package_name, rating, sort_order, pack_id, is_top, is_featured, release_date)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
         ->execute([
             $categoryId,
             $name,
@@ -863,8 +871,8 @@ function insert_app(): int
             $packId,
             (int)param('is_top', 0) ?: 0,
             (int)param('is_featured', 0) ?: 0,
-            param('release_date', '') ?: null,
-            (int)param('is_new', 0) ?: 0,
+            // 新软件默认发布日期 = 今天 → 自动带 3 天「新」标 (管理端可填旧日期取消)
+            param('release_date', '') ?: date('Y-m-d'),
         ]);
     return (int)db()->lastInsertId();
 }

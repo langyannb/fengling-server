@@ -11,21 +11,21 @@
 * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 :root {
   --primary: #4C6FFF; --primary-soft: rgba(76,111,255,.12);
-  --bg: #EEF1FA; --card: rgba(255,255,255,.72); --card2: rgba(76,111,255,.06);
-  --text: #1A1A2E; --text2: #8A8FA8;
+  --bg: #EEF1FA; --card: rgba(255,255,255,.88); --card2: rgba(76,111,255,.07);
+  --text: #1A1A2E; --text2: #6E748C;
   --danger: #F5455C; --success: #22B07D;
   --radius: 18px; --radius-sm: 12px;
   --shadow: 0 8px 32px rgba(30,40,90,.08);
   --shadow-lg: 0 16px 48px rgba(30,40,90,.14);
-  --glass: rgba(255,255,255,.65);
+  --glass: rgba(255,255,255,.86);
   --glass-border: rgba(255,255,255,.65);
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #0F1017; --card: rgba(255,255,255,.06); --card2: rgba(255,255,255,.04);
-    --text: #ECECF2; --text2: #9AA0B4;
-    --glass: rgba(28,30,42,.72);
-    --glass-border: rgba(255,255,255,.08);
+    --bg: #0F1017; --card: rgba(255,255,255,.09); --card2: rgba(255,255,255,.05);
+    --text: #ECECF2; --text2: #A9AFC4;
+    --glass: rgba(28,30,42,.86);
+    --glass-border: rgba(255,255,255,.09);
     --shadow: 0 8px 32px rgba(0,0,0,.4);
     --shadow-lg: 0 16px 48px rgba(0,0,0,.55);
   }
@@ -38,7 +38,7 @@ body::before { content: ''; position: fixed; inset: 0; z-index: -1; pointer-even
     radial-gradient(480px 300px at 95% 15%, rgba(124,77,255,.13), transparent 70%),
     radial-gradient(420px 340px at 50% 105%, rgba(34,176,125,.09), transparent 70%);
 }
-input, select, textarea { width: 100%; padding: 12px 15px; border: 1.5px solid transparent; border-radius: var(--radius-sm); font-size: 15px; outline: none; background: var(--card2); color: var(--text); transition: border .2s, background .2s; }
+input, select, textarea { width: 100%; padding: 13px 16px; border: 1.5px solid transparent; border-radius: var(--radius-sm); font-size: 15px; outline: none; background: var(--card2); color: var(--text); transition: border .2s, background .2s; }
 input:focus, textarea:focus { border-color: var(--primary); background: var(--card); }
 input::placeholder, textarea::placeholder { color: var(--text2); opacity: .7; }
 button { cursor: pointer; border: none; border-radius: var(--radius-sm); font-size: 14px; font-family: inherit; }
@@ -48,23 +48,23 @@ button { cursor: pointer; border: none; border-radius: var(--radius-sm); font-si
 .login-logo::after { content: ''; position: absolute; top: -30%; left: -30%; width: 70%; height: 70%; background: rgba(255,255,255,.25); border-radius: 50%; filter: blur(2px); }
 .login-title { font-size: 24px; font-weight: 800; margin-bottom: 4px; letter-spacing: 1px; }
 .login-sub { color: var(--text2); font-size: 13px; margin-bottom: 32px; }
-.login-card { width: 100%; max-width: 380px; background: var(--glass); backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px); padding: 30px 26px; border-radius: 26px; box-shadow: var(--shadow-lg); border: 1px solid var(--glass-border); }
+.login-card { width: 100%; max-width: 380px; background: var(--glass); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); padding: 30px 26px; border-radius: 26px; box-shadow: var(--shadow-lg); border: 1px solid var(--glass-border); }
 .login-card input { margin-bottom: 14px; }
 .login-err { color: var(--danger); font-size: 13px; margin-bottom: 10px; text-align: center; }
 /* ===== 顶栏 ===== */
 .admin-page { padding-bottom: 108px; }
-.topbar { position: sticky; top: 0; background: var(--glass); backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px); padding: 16px 20px; display: flex; align-items: center; gap: 10px; z-index: 10; border-bottom: 1px solid var(--glass-border); }
+.topbar { position: sticky; top: 0; background: var(--glass); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); padding: 16px 20px; display: flex; align-items: center; gap: 10px; z-index: 10; border-bottom: 1px solid var(--glass-border); }
 .topbar h1 { font-size: 19px; flex: 1; font-weight: 800; letter-spacing: .5px; }
 .topbar .user-chip { font-size: 12px; color: var(--text2); background: var(--card2); padding: 4px 12px; border-radius: 20px; }
 .topbar .logout { background: var(--card2); color: var(--danger); font-size: 13px; padding: 6px 14px; border-radius: 20px; }
 /* ===== 子 tab 胶囊 (页面内切换) ===== */
 .sub-tabs { display: flex; gap: 8px; padding: 14px 16px 4px; overflow-x: auto; scrollbar-width: none; }
 .sub-tabs::-webkit-scrollbar { display: none; }
-.sub-tab { flex-shrink: 0; padding: 9px 20px; font-size: 14px; color: var(--text2); background: var(--card); border: 1px solid var(--glass-border); border-radius: 14px; backdrop-filter: blur(16px); transition: all .2s; }
+.sub-tab { flex-shrink: 0; padding: 9px 20px; font-size: 14px; color: var(--text2); background: var(--card); border: 1px solid var(--glass-border); border-radius: 14px; transition: all .2s; }
 .sub-tab.active { color: #fff; background: var(--primary); font-weight: 600; box-shadow: 0 6px 18px rgba(76,111,255,.35); }
 /* ===== 统计 ===== */
 .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 14px 16px; }
-.stat-card { background: var(--card); backdrop-filter: blur(20px); border: 1px solid var(--glass-border); border-radius: var(--radius); padding: 18px; box-shadow: var(--shadow); position: relative; overflow: hidden; }
+.stat-card { background: var(--card); border: 1px solid var(--glass-border); border-radius: var(--radius); padding: 18px; box-shadow: var(--shadow); position: relative; overflow: hidden; }
 .stat-card::before { content: ''; position: absolute; top: -40%; right: -20%; width: 80%; height: 80%; border-radius: 50%; background: linear-gradient(135deg, rgba(76,111,255,.14), rgba(124,77,255,.06)); }
 .stat-num { font-size: 30px; font-weight: 800; color: var(--primary); position: relative; }
 .stat-label { font-size: 12px; color: var(--text2); margin-top: 4px; position: relative; }
@@ -74,7 +74,7 @@ button { cursor: pointer; border: none; border-radius: var(--radius-sm); font-si
 .section { padding: 14px 16px; }
 .section-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
 .section-head h2 { font-size: 16px; font-weight: 700; }
-.list-item { background: var(--card); backdrop-filter: blur(20px); border: 1px solid var(--glass-border); border-radius: var(--radius); padding: 15px; margin-bottom: 10px; box-shadow: var(--shadow); display: flex; align-items: center; gap: 12px; transition: transform .15s; }
+.list-item { background: var(--card); border: 1px solid var(--glass-border); border-radius: var(--radius); padding: 15px; margin-bottom: 10px; box-shadow: var(--shadow); display: flex; align-items: center; gap: 12px; transition: transform .15s; }
 .list-item:active { transform: scale(.985); }
 .list-item .icon { width: 46px; height: 46px; border-radius: 14px; object-fit: cover; background: var(--card2); flex-shrink: 0; }
 .list-item .info { flex: 1; min-width: 0; }
@@ -90,18 +90,22 @@ button { cursor: pointer; border: none; border-radius: var(--radius-sm); font-si
 .btn-green { background: rgba(34,176,125,.12); color: var(--success); padding: 8px 13px; font-size: 13px; border-radius: 10px; }
 /* ===== 弹层 (底部滑出玻璃) ===== */
 .modal-mask { position: fixed; inset: 0; background: rgba(10,12,25,.5); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); z-index: 200; display: flex; align-items: flex-end; }
-.modal { width: 100%; background: var(--glass); backdrop-filter: blur(28px); -webkit-backdrop-filter: blur(28px); border: 1px solid var(--glass-border); border-radius: 26px 26px 0 0; padding: 24px 22px calc(22px + env(safe-area-inset-bottom)); max-height: 90vh; overflow-y: auto; animation: slideUp .3s cubic-bezier(.2,.8,.2,1); }
+.modal { width: 100%; background: var(--glass); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); border: 1px solid var(--glass-border); border-radius: 26px 26px 0 0; padding: 26px 24px calc(24px + env(safe-area-inset-bottom)); max-height: 90vh; overflow-y: auto; animation: slideUp .3s cubic-bezier(.2,.8,.2,1); }
 @keyframes slideUp { from { transform: translateY(80px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
 .modal h3 { font-size: 18px; margin-bottom: 18px; font-weight: 800; }
-.form-group { margin-bottom: 14px; }
-.form-group label { display: block; font-size: 12.5px; color: var(--text2); margin-bottom: 7px; font-weight: 500; }
-.form-row { display: flex; gap: 10px; }
+.form-group { margin-bottom: 16px; }
+.form-group label { display: block; font-size: 13px; color: var(--text2); margin-bottom: 8px; font-weight: 600; }
+.form-row { display: flex; gap: 12px; }
 .form-row > div { flex: 1; min-width: 0; }
+/* 表单分组小标题 */
+.form-sec { font-size: 13px; font-weight: 700; color: var(--primary); margin: 20px 0 12px; display: flex; align-items: center; gap: 8px; }
+.form-sec::after { content: ''; flex: 1; height: 1px; background: linear-gradient(90deg, var(--primary-soft), transparent); }
+.form-tip { font-size: 12px; color: var(--text2); line-height: 1.6; background: var(--card2); border-radius: 10px; padding: 10px 12px; margin-bottom: 16px; }
 .modal-btns { display: flex; gap: 10px; margin-top: 20px; }
 .modal-btns .btn-primary, .modal-btns .btn-ghost { flex: 1; }
 .empty { text-align: center; color: var(--text2); padding: 44px 0; font-size: 14px; }
 /* ===== 底部玻璃导航 ===== */
-.bottom-nav { position: fixed; left: 14px; right: 14px; bottom: calc(12px + env(safe-area-inset-bottom)); background: var(--glass); backdrop-filter: blur(28px); -webkit-backdrop-filter: blur(28px); border: 1px solid var(--glass-border); border-radius: 24px; box-shadow: var(--shadow-lg); display: flex; padding: 7px; z-index: 100; }
+.bottom-nav { position: fixed; left: 14px; right: 14px; bottom: calc(12px + env(safe-area-inset-bottom)); background: var(--glass); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); border: 1px solid var(--glass-border); border-radius: 24px; box-shadow: var(--shadow-lg); display: flex; padding: 7px; z-index: 100; }
 .bottom-nav button { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 8px 0 7px; border-radius: 18px; font-size: 10.5px; color: var(--text2); background: transparent; transition: all .2s; }
 .bottom-nav button .ic { font-size: 21px; line-height: 1; filter: grayscale(.6); opacity: .75; transition: all .2s; }
 .bottom-nav button.active { color: var(--primary); font-weight: 700; background: var(--primary-soft); }
@@ -394,8 +398,8 @@ button { cursor: pointer; border: none; border-radius: var(--radius-sm); font-si
         <img v-if="app.icon" :src="app.icon" class="icon">
         <div v-else class="icon" style="display:flex;align-items:center;justify-content:center;color:var(--primary);font-weight:700;">{{(app.name||'?')[0]}}</div>
         <div class="info">
-          <div class="name">{{app.name}}<span v-if="app.is_pack" class="badge badge-pack">整合</span><span v-if="!app.is_active" class="badge badge-off">下架</span></div>
-          <div class="meta">{{app.category_name||'未分类'}} · {{app.download_count}}下载</div>
+          <div class="name">{{app.name}}<span v-if="app.is_new" class="badge">新</span><span v-if="app.is_pack" class="badge badge-pack">整合</span><span v-if="!app.is_active" class="badge badge-off">下架</span></div>
+          <div class="meta">{{app.category_name||'未分类'}} · {{app.download_count}}下载<span v-if="app.release_date"> · {{app.release_date}}</span></div>
         </div>
         <div class="ops">
           <button class="btn-sm" @click="openApp(app)">编辑</button>
@@ -441,6 +445,7 @@ button { cursor: pointer; border: none; border-radius: var(--radius-sm); font-si
     <div v-if="showApp" class="modal-mask" @click.self="showApp=false">
       <div class="modal">
         <h3>{{appForm.id ? '编辑软件' : '添加软件'}}</h3>
+        <div class="form-sec">基本信息</div>
         <div class="form-group"><label>名称 *</label><input v-model="appForm.name" placeholder="软件名"></div>
         <div class="form-row">
           <div class="form-group"><label>分类</label>
@@ -449,9 +454,11 @@ button { cursor: pointer; border: none; border-radius: var(--radius-sm); font-si
               <option v-for="c in cats" :key="c.id" :value="c.id">{{c.name}}</option>
             </select>
           </div>
-          <div class="form-group"><label>版本 (改了自动标「新版本」)</label><input v-model="appForm.version" placeholder="1.0"></div>
-          <div class="form-group"><label>发布日期</label><input v-model="appForm.release_date" type="date"></div>
+          <div class="form-group"><label>版本 (改了自动标「新」3 天)</label><input v-model="appForm.version" placeholder="1.0"></div>
         </div>
+        <div class="form-group"><label>包名</label><input v-model="appForm.package_name" placeholder="com.example.app"></div>
+        <div class="form-group"><label>描述</label><textarea v-model="appForm.description" rows="3" placeholder="软件介绍"></textarea></div>
+        <div class="form-sec">图标与介绍图</div>
         <div class="form-group"><label>图标 (点击上传)</label>
           <div class="upload-box" @click="pickImage('icon')">
             <img v-if="appForm.icon" :src="appForm.icon">
@@ -460,41 +467,37 @@ button { cursor: pointer; border: none; border-radius: var(--radius-sm); font-si
           </div>
         </div>
         <div class="form-group"><label>介绍图片 (应用市场风格, 可一次多选, 点击上传)</label>
-          <div style="display:flex;flex-wrap:wrap;gap:8px;">
-            <div v-for="(shot, si) in appForm.screenshots" :key="si" style="position:relative;width:96px;height:96px;border-radius:var(--radius-sm);overflow:hidden;border:1.5px solid #E8EAF2;">
+          <div style="display:flex;flex-wrap:wrap;gap:10px;">
+            <div v-for="(shot, si) in appForm.screenshots" :key="si" style="position:relative;width:108px;height:108px;border-radius:var(--radius-sm);overflow:hidden;border:1.5px solid #E8EAF2;">
               <img :src="shot" style="width:100%;height:100%;object-fit:cover;">
               <button type="button" style="position:absolute;top:2px;right:2px;background:rgba(245,69,92,.9);color:#fff;width:20px;height:20px;border-radius:50%;font-size:12px;line-height:20px;padding:0;" @click="appForm.screenshots.splice(si,1)">×</button>
             </div>
-            <div class="upload-box" @click="pickImage('screenshots')" style="width:96px;height:96px;flex-shrink:0;">
+            <div class="upload-box" @click="pickImage('screenshots')" style="width:108px;height:108px;flex-shrink:0;">
               <template v-if="uploading==='screenshots'"><span style="font-size:11px;text-align:center;padding:4px;line-height:1.4;">{{uploadProgress || '上传中...'}}</span></template>
               <template v-else><span style="font-size:24px;">+</span></template>
             </div>
           </div>
         </div>
+        <div class="form-sec">发布设置</div>
         <div class="form-row">
-          <div class="form-group"><label>投稿人 QQ (用于关于页投稿名单头像, 不对外显示号码)</label><input v-model="appForm.contributor_qq" placeholder="QQ号, 可留空"></div>
+          <div class="form-group"><label>发布日期 (新软件默认今天)</label><input v-model="appForm.release_date" type="date"></div>
+          <div class="form-group"><label>排序 (已改为按时间, 保留备用)</label><input v-model="appForm.sort_order" type="number"></div>
         </div>
-        <div class="form-group"><label>包名</label><input v-model="appForm.package_name" placeholder="com.example.app"></div>
-        <div class="form-group"><label>描述</label><textarea v-model="appForm.description" rows="3" placeholder="软件介绍"></textarea></div>
         <div class="form-row">
-          <div class="form-group"><label>排序</label><input v-model="appForm.sort_order" type="number"></div>
           <div class="form-group"><label>状态</label>
             <select v-model="appForm.is_active"><option :value="1">上架</option><option :value="0">下架</option></select>
           </div>
-        </div>
-        <div class="form-row">
           <div class="form-group"><label>标记</label>
             <select v-model="appForm.is_top"><option :value="1">🔝 置顶</option><option :value="0">不置顶</option></select>
           </div>
+        </div>
+        <div class="form-row">
           <div class="form-group"><label>精选</label>
             <select v-model="appForm.is_featured"><option :value="1">⭐ 精选</option><option :value="0">非精选</option></select>
           </div>
-          <div class="form-group"><label>新版本标志</label>
-            <select v-model="appForm.is_new" @change="isNewTouched = true">
-              <option :value="1">✨ 新版本</option><option :value="0">普通</option>
-            </select>
-          </div>
+          <div class="form-group"><label>投稿人 QQ (关于页头像, 不显示号码)</label><input v-model="appForm.contributor_qq" placeholder="QQ号, 可留空"></div>
         </div>
+        <div class="form-tip">✨ 「新」标规则：新添加软件或改版本号 → 自动标「新」并在 App 端靠前排，3 天后自动消失。手动改发布日期可控制。</div>
         <div class="form-group"><label>整合包 (选择后此软件作为整合包的子项)</label>
           <select v-model="appForm.pack_id">
             <option :value="null">独立软件</option>
@@ -627,8 +630,7 @@ createApp({
       uploading: '',
       uploadProgress: '',
       colors: ['#4C6FFF', '#22B07D', '#FF8F1F', '#FF4D6D', '#7C4DFF', '#00B8D4', '#FFB300', '#F5455C'],
-      appForm: { id: 0, name: '', category_id: 0, icon: '', version: '', description: '', screenshots: [], contributor_qq: '', package_name: '', sort_order: 0, is_active: 1, pack_id: null, is_top: 0, is_featured: 0, release_date: '', is_new: 0, links: [] },
-      isNewTouched: false, // 新版本标志是否被手动改过 (没改过则让后端按版本变更自动置位)
+      appForm: { id: 0, name: '', category_id: 0, icon: '', version: '', description: '', screenshots: [], contributor_qq: '', package_name: '', sort_order: 0, is_active: 1, pack_id: null, is_top: 0, is_featured: 0, release_date: '', links: [] },
       bannerForm: { id: 0, image: '', title: '', app_id: null, url: '', sort_order: 0, is_active: 1 },
       catForm: { id: 0, name: '', color: '#4C6FFF', icon: '', sort_order: 0 },
       verForm: { version: '1.0.0', url: '', update_log: '', update_mode: 'internal', force_update: 0, size_mb: 0, release_date: '' },
@@ -977,7 +979,6 @@ createApp({
     },
     // 软件
     async openApp(app) {
-      this.isNewTouched = false;
       this.appForm = {
         id: app ? app.id : 0, name: app ? app.name : '', category_id: app ? (Number(app.category_id) || 0) : 0,
         icon: app ? app.icon : '', version: app ? app.version : '', description: app ? app.description : '',
@@ -986,7 +987,7 @@ createApp({
         package_name: app ? app.package_name : '', sort_order: app ? app.sort_order : 0,
         is_active: app ? Number(app.is_active) : 1, pack_id: app ? (app.pack_id || null) : null,
         is_top: app ? Number(app.is_top) : 0, is_featured: app ? Number(app.is_featured) : 0,
-        release_date: app ? (app.release_date || '') : '', is_new: app ? Number(app.is_new) : 0,
+        release_date: app ? (app.release_date || '') : '',
         links: [],
       };
       this.showApp = true;
@@ -1011,7 +1012,6 @@ createApp({
               is_top: Number(d.is_top) || 0,
               is_featured: Number(d.is_featured) || 0,
               release_date: d.release_date || '',
-              is_new: Number(d.is_new) || 0,
               links: (d.pan_links || []).map(l => ({ ...l, _k: 'l' + l.id + Math.random(), _editing: false })),
             };
             // 记录原始链接 id (用于检测保存时被删除的链接)
@@ -1046,9 +1046,9 @@ createApp({
       }
       let r;
       if (f.id) {
-        r = await this.api('app_update', { id: f.id, name: f.name, category_id: f.category_id || null, icon: f.icon, version: f.version, description: f.description, screenshots: JSON.stringify(f.screenshots || []), contributor_qq: f.contributor_qq || '', package_name: f.package_name, sort_order: Number(f.sort_order) || 0, is_active: Number(f.is_active), pack_id: f.pack_id || null, is_top: Number(f.is_top) || 0, is_featured: Number(f.is_featured) || 0, release_date: f.release_date || '', ...(this.isNewTouched ? { is_new: Number(f.is_new) || 0 } : {}) }, 'POST');
+        r = await this.api('app_update', { id: f.id, name: f.name, category_id: f.category_id || null, icon: f.icon, version: f.version, description: f.description, screenshots: JSON.stringify(f.screenshots || []), contributor_qq: f.contributor_qq || '', package_name: f.package_name, sort_order: Number(f.sort_order) || 0, is_active: Number(f.is_active), pack_id: f.pack_id || null, is_top: Number(f.is_top) || 0, is_featured: Number(f.is_featured) || 0, release_date: f.release_date || '' }, 'POST');
       } else {
-        r = await this.api('app_create', { name: f.name, category_id: f.category_id || null, icon: f.icon, version: f.version, description: f.description, screenshots: JSON.stringify(f.screenshots || []), contributor_qq: f.contributor_qq || '', package_name: f.package_name, sort_order: Number(f.sort_order) || 0, pack_id: f.pack_id || null, is_top: Number(f.is_top) || 0, is_featured: Number(f.is_featured) || 0, release_date: f.release_date || '', is_new: Number(f.is_new) || 0 }, 'POST');
+        r = await this.api('app_create', { name: f.name, category_id: f.category_id || null, icon: f.icon, version: f.version, description: f.description, screenshots: JSON.stringify(f.screenshots || []), contributor_qq: f.contributor_qq || '', package_name: f.package_name, sort_order: Number(f.sort_order) || 0, pack_id: f.pack_id || null, is_top: Number(f.is_top) || 0, is_featured: Number(f.is_featured) || 0, release_date: f.release_date || '' }, 'POST');
         if (r.code === 0 && r.data) f.id = r.data.id;
       }
       if (r.code !== 0) {
