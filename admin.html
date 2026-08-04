@@ -429,8 +429,10 @@ button { cursor: pointer; border: none; border-radius: var(--radius-sm); font-si
     <!-- 分类管理 -->
     <div v-if="tab==='cats'" class="section">
       <div v-if="!cats.length" class="empty">暂无分类</div>
-      <div v-for="c in cats" :key="c.id" class="list-item">
-        <div class="info"><div class="name">{{c.name}}</div></div>
+      <div v-for="c in sortedCats" :key="c.id" class="list-item">
+        <div class="info">
+          <div class="name"><span v-if="c.parent_id" style="color:var(--text2);font-size:12px;">子分类 · </span>{{c.name}}<span v-if="c.parent_id" style="color:var(--text2);font-size:12px;margin-left:6px;">({{catName(c.parent_id)}})</span></div>
+        </div>
         <div class="ops">
           <button class="btn-sm" @click="editCat(c)">编辑</button>
           <button class="btn-danger" @click="delCat(c)">删</button>
@@ -451,7 +453,7 @@ button { cursor: pointer; border: none; border-radius: var(--radius-sm); font-si
           <div class="form-group"><label>分类</label>
             <select v-model="appForm.category_id">
               <option :value="0">未分类</option>
-              <option v-for="c in cats" :key="c.id" :value="c.id">{{c.name}}</option>
+              <option v-for="c in sortedCats" :key="c.id" :value="c.id">{{c.parent_id ? '— ' + c.name : c.name}}</option>
             </select>
           </div>
           <div class="form-group"><label>版本</label><input v-model="appForm.version" placeholder="1.0"></div>
@@ -580,6 +582,12 @@ button { cursor: pointer; border: none; border-radius: var(--radius-sm); font-si
       <div class="modal">
         <h3>{{catForm.id ? '编辑分类' : '添加分类'}}</h3>
         <div class="form-group"><label>名称 *</label><input v-model="catForm.name" placeholder="分类名"></div>
+        <div class="form-group"><label>父分类 (留空为顶级分类)</label>
+          <select v-model="catForm.parent_id">
+            <option :value="0">— 顶级分类 —</option>
+            <option v-for="p in topCats" :key="p.id" :value="p.id" :disabled="p.id===catForm.id">{{p.name}}</option>
+          </select>
+        </div>
         <div class="form-group"><label>图标 (点击上传)</label>
           <div class="upload-box" @click="pickImage('catIcon')">
             <template v-if="!catForm.icon"><span style="font-size:24px;">+</span><span>上传分类图标</span></template>
@@ -638,7 +646,7 @@ createApp({
       appForm: { id: 0, name: '', category_id: 0, icon: '', version: '', description: '', screenshots: [], contributor_qq: '', package_name: '', sort_order: 0, is_active: 1, pack_id: null, is_top: 0, is_featured: 0, release_date: '', is_new: 0, links: [] },
       newFlagTouched: false, // 「新版本标」是否被手动改过 (没改过则让后端按版本变更自动标新)
       bannerForm: { id: 0, image: '', title: '', app_id: null, url: '', sort_order: 0, is_active: 1 },
-      catForm: { id: 0, name: '', color: '#4C6FFF', icon: '', sort_order: 0 },
+      catForm: { id: 0, parent_id: 0, name: '', color: '#4C6FFF', icon: '', sort_order: 0 },
       verForm: { version: '1.0.0', url: '', update_log: '', update_mode: 'internal', force_update: 0, size_mb: 0, release_date: '' },
       noticeForm: { content: '', mode: 'daily', enabled: 0 },
       contribQQ: '',
@@ -659,7 +667,23 @@ createApp({
     const saved = localStorage.getItem('fl_mainTab');
     if (saved && ['stats','apps','publish','settings'].includes(saved)) this.mainTab = saved;
   },
+  computed: {
+    // 分类排序: 顶级在前, 子分类跟随父分类
+    sortedCats() {
+      return [...this.cats].sort((a, b) =>
+        (a.parent_id || 0) - (b.parent_id || 0) || (a.sort_order || 0) - (b.sort_order || 0) || a.id - b.id);
+    },
+    // 顶级分类 (父分类下拉选项)
+    topCats() {
+      return this.cats.filter(c => !c.parent_id);
+    },
+  },
   methods: {
+    /** 按 id 查分类名 (分类列表显示父分类名) */
+    catName(id) {
+      const c = this.cats.find(x => x.id === id);
+      return c ? c.name : '';
+    },
     async api(action, params = {}, method = 'GET') {
       let url = 'api.php?action=' + action;
       const opt = { method, headers: { 'Authorization': 'Bearer ' + this.token } };
@@ -1113,7 +1137,7 @@ createApp({
     },
     // 分类
     editCat(c) {
-      this.catForm = c ? { ...c } : { id: 0, name: '', color: '#4C6FFF', icon: '', sort_order: 0 };
+      this.catForm = c ? { ...c, parent_id: c.parent_id || 0 } : { id: 0, parent_id: 0, name: '', color: '#4C6FFF', icon: '', sort_order: 0 };
       this.showCat = true;
     },
     async saveCat() {
@@ -1121,9 +1145,9 @@ createApp({
       if (!f.name) { this.toast('请输入分类名'); return; }
       let r;
       if (f.id) {
-        r = await this.api('category_update', { id: f.id, name: f.name, color: f.color, icon: f.icon || '', sort_order: Number(f.sort_order) || 0 }, 'POST');
+        r = await this.api('category_update', { id: f.id, name: f.name, parent_id: Number(f.parent_id) || 0, color: f.color, icon: f.icon || '', sort_order: Number(f.sort_order) || 0 }, 'POST');
       } else {
-        r = await this.api('category_create', { name: f.name, color: f.color, icon: f.icon || '', sort_order: Number(f.sort_order) || 0 }, 'POST');
+        r = await this.api('category_create', { name: f.name, parent_id: Number(f.parent_id) || 0, color: f.color, icon: f.icon || '', sort_order: Number(f.sort_order) || 0 }, 'POST');
       }
       if (r.code !== 0) {
         if (r.code !== 401) this.toast('保存失败: ' + (r.msg || '未知错误'));

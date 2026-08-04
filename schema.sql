@@ -11,13 +11,16 @@ CREATE TABLE IF NOT EXISTS `users` (
   `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- 分类表
+-- 分类表 (parent_id=0 为顶级分类, 支持一级子分类树)
 CREATE TABLE IF NOT EXISTS `categories` (
   `id` INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  `parent_id` INT UNSIGNED NOT NULL DEFAULT 0,
   `name` VARCHAR(50) NOT NULL UNIQUE,
   `color` VARCHAR(20) DEFAULT '#4C6FFF',
+  `icon` VARCHAR(255) DEFAULT '',
   `sort_order` INT DEFAULT 0,
-  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  KEY `idx_parent` (`parent_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- 软件表

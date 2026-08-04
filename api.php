@@ -190,30 +190,37 @@ try {
             json_out(null);
 
         // ============ 分类 (公开读, 管理写) ============
+        // parent_id=0 顶级在前, 子分类跟随父分类 (App 端按 parent_id 建树)
         case 'categories':
-            json_out(db()->query('SELECT * FROM categories ORDER BY sort_order ASC, id ASC')->fetchAll());
+            json_out(db()->query('SELECT * FROM categories ORDER BY parent_id ASC, sort_order ASC, id ASC')->fetchAll());
 
         case 'category_create':
             require_admin();
             $name = param('name', '');
             if (!$name) json_error('分类名不能为空');
+            $parentId = (int)param('parent_id', 0);
             $color = param('color', '#4C6FFF');
             $icon = param('icon', ''); // 分类图标 (上传图片 URL)
             $sort = (int)param('sort_order', 0);
-            db()->prepare('INSERT INTO categories (name, color, icon, sort_order) VALUES (?, ?, ?, ?)')
-                ->execute([$name, $color, $icon, $sort]);
+            if ($parentId > 0 && !category_exists($parentId)) json_error('父分类不存在');
+            db()->prepare('INSERT INTO categories (parent_id, name, color, icon, sort_order) VALUES (?, ?, ?, ?, ?)')
+                ->execute([$parentId, $name, $color, $icon, $sort]);
             json_out(['id' => (int)db()->lastInsertId()]);
 
         case 'category_update':
             require_admin();
             $id = (int)param('id', 0);
             $name = param('name');
+            $parentId = param('parent_id', null);
             $color = param('color');
             $icon = param('icon');
             $sort = param('sort_order');
+            // 父分类不能指向自己; 不能指向自己的子分类 (防循环)
+            if ($parentId !== null && (int)$parentId === $id) json_error('父分类不能是自己');
             $sql = 'UPDATE categories SET ';
             $args = [];
             if ($name !== null) { $sql .= 'name = ?, '; $args[] = $name; }
+            if ($parentId !== null) { $sql .= 'parent_id = ?, '; $args[] = (int)$parentId; }
             if ($color !== null) { $sql .= 'color = ?, '; $args[] = $color; }
             if ($icon !== null) { $sql .= 'icon = ?, '; $args[] = $icon; }
             if ($sort !== null) { $sql .= 'sort_order = ?, '; $args[] = (int)$sort; }
@@ -226,6 +233,8 @@ try {
         case 'category_delete':
             require_admin();
             $id = (int)param('id', 0);
+            // 子分类提升为顶级, 避免孤儿分类
+            db()->prepare('UPDATE categories SET parent_id = 0 WHERE parent_id = ?')->execute([$id]);
             db()->prepare('DELETE FROM categories WHERE id = ?')->execute([$id]);
             json_out(null);
 
@@ -243,8 +252,17 @@ try {
                 $sql .= ' AND a.pack_id = ?';
                 $args[] = (int)$packId ?: 0;
             } elseif ($categoryId > 0) {
-                $sql .= ' AND a.category_id = ?';
-                $args[] = $categoryId;
+                // 分类过滤: 父分类 → 包含其所有子分类的软件; 子分类 → 只查自己
+                $subs = db()->prepare('SELECT id FROM categories WHERE parent_id = ?');
+                $subs->execute([$categoryId]);
+                $subIds = array_column($subs->fetchAll(), 'id');
+                if ($subIds) {
+                    $subIds[] = $categoryId;
+                    $sql .= ' AND a.category_id IN (' . implode(',', array_map('intval', $subIds)) . ')';
+                } else {
+                    $sql .= ' AND a.category_id = ?';
+                    $args[] = $categoryId;
+                }
             }
             if ($keyword !== '') { $sql .= ' AND a.name LIKE ?'; $args[] = '%' . $keyword . '%'; }
             // 排序: 置顶优先 → 带「新」标的在前 → 按发布/创建时间倒序 → id 兜底
@@ -804,6 +822,14 @@ try {
     }
 } catch (Throwable $e) {
     json_error('服务器错误: ' . $e->getMessage(), 500);
+}
+
+/** 分类是否存在 */
+function category_exists(int $id): bool
+{
+    $st = db()->prepare('SELECT 1 FROM categories WHERE id = ?');
+    $st->execute([$id]);
+    return (bool)$st->fetch();
 }
 
 /** 管理员校验: 从 Authorization 头或 token 参数取 token */
