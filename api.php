@@ -817,6 +817,42 @@ try {
             $rows = db()->query("SELECT * FROM crash_reports ORDER BY id DESC LIMIT 100")->fetchAll();
             json_out($rows);
 
+        case 'harm_report':
+            // 反馈和谐提交 (App 端匿名, 无需登录; content 截断防刷库)
+            $content = (string)param('content', '');
+            if (mb_strlen($content) > 500) $content = mb_substr($content, 0, 500);
+            if (trim($content) === '') json_error('请填写哪里被和谐了', 400);
+            $contact = (string)param('contact', '');
+            if (mb_strlen($contact) > 100) $contact = mb_substr($contact, 0, 100);
+            db()->prepare("INSERT INTO harm_reports (app_id, app_name, content, contact, ip) VALUES (?, ?, ?, ?, ?)")
+                ->execute([
+                    (int)param('app_id', 0),
+                    mb_substr((string)param('app_name', ''), 0, 100),
+                    $content,
+                    $contact,
+                    client_ip(),
+                ]);
+            json_out(null);
+
+        case 'harm_reports':
+            // 反馈和谐列表 (管理端)
+            require_admin();
+            $rows = db()->query("SELECT * FROM harm_reports ORDER BY status ASC, id DESC LIMIT 200")->fetchAll();
+            json_out($rows);
+
+        case 'harm_report_delete':
+            // 删除反馈 (管理端)
+            require_admin();
+            db()->prepare("DELETE FROM harm_reports WHERE id = ?")->execute([(int)param('id', 0)]);
+            json_out(null);
+
+        case 'harm_report_status':
+            // 标记已处理/未处理 (管理端)
+            require_admin();
+            db()->prepare("UPDATE harm_reports SET status = ? WHERE id = ?")
+                ->execute([(int)param('status', 0) === 1 ? 1 : 0, (int)param('id', 0)]);
+            json_out(null);
+
         default:
             json_error('未知操作: ' . $action, 404);
     }

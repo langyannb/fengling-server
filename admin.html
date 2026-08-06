@@ -262,6 +262,7 @@ button { cursor: pointer; border: none; border-radius: var(--radius-sm); font-si
         <button class="sub-tab" :class="{active: tab==='about'}" @click="switchTab('about')">⚙️ 关于</button>
         <button class="sub-tab" :class="{active: tab==='contrib'}" @click="switchTab('contrib')">🙋 投稿</button>
         <button class="sub-tab" :class="{active: tab==='crash'}" @click="switchTab('crash')">💥 崩溃</button>
+        <button class="sub-tab" :class="{active: tab==='harm'}" @click="switchTab('harm')">🔕 和谐</button>
       </div>
 
     <!-- 关于配置 -->
@@ -338,6 +339,31 @@ button { cursor: pointer; border: none; border-radius: var(--radius-sm); font-si
             <summary style="cursor:pointer;color:var(--primary);font-size:13px;">查看堆栈 ({{c.stack.split('\n').length}} 行)</summary>
             <pre style="background:#f5f5f7;border-radius:8px;padding:10px;font-size:11px;line-height:1.5;overflow:auto;max-height:280px;white-space:pre-wrap;word-break:break-all;color:#333;">{{c.stack}}</pre>
           </details>
+        </div>
+      </div>
+    </div>
+
+    <!-- 反馈和谐 (App 端「反馈和谐」提交) -->
+    <div v-if="tab==='harm'" class="section">
+      <div class="section-head"><h2>反馈和谐</h2>
+        <button class="btn-sm" style="padding:0 20px;font-size:14px;" @click="loadHarmReports">🔄 刷新</button>
+      </div>
+      <div style="font-size:12px;color:var(--text2);margin-bottom:14px;">App 端用户提交的「哪里被和谐了」反馈 (软件/说明/IP/联系方式)，处理完点「已处理」。</div>
+      <div v-if="!harms.length" class="empty">暂无反馈</div>
+      <div v-for="h in harms" :key="h.id" class="list-item" style="align-items:flex-start;" :style="h.status==1 ? 'opacity:.55' : ''">
+        <div class="info" style="flex:1;min-width:0;">
+          <div class="name">
+            {{h.app_name || '未知软件'}}
+            <span style="font-weight:normal;font-size:12px;color:var(--text2);">{{h.created_at}} · IP {{h.ip || '?'}}</span>
+            <span v-if="h.status==1" style="margin-left:6px;font-size:11px;color:#16a34a;border:1px solid #16a34a;border-radius:4px;padding:0 6px;">已处理</span>
+          </div>
+          <div style="font-size:13px;margin-top:4px;white-space:pre-wrap;word-break:break-all;">{{h.content}}</div>
+          <div v-if="h.contact" style="font-size:12px;color:var(--text2);margin-top:4px;">联系方式: {{h.contact}}</div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:6px;margin-left:10px;">
+          <button class="btn-sm" v-if="h.status==0" @click="markHarm(h.id, 1)" style="white-space:nowrap;color:#16a34a;">✅ 已处理</button>
+          <button class="btn-sm" v-else @click="markHarm(h.id, 0)" style="white-space:nowrap;">↩ 重开</button>
+          <button class="btn-sm" @click="deleteHarm(h.id)" style="white-space:nowrap;color:#dc2626;">🗑 删除</button>
         </div>
       </div>
     </div>
@@ -657,6 +683,7 @@ createApp({
       contribForm: { id: 0, qq: '', name: '', bio: '', sort_order: 0 },
       aboutForm: { qq_group: '', qq_key: '', qq_url: '', website: '', github: '', feedback: '', donate: '', banner_text: '风铃分享库 · 官方频道', banner_sub: '最新软件 · 更新通知 · 交流反馈' },
       crashes: [],
+      harms: [],
     };
   },
   mounted() {
@@ -725,7 +752,7 @@ createApp({
       if (['stats'].includes(t)) this.mainTab = 'stats';
       if (['apps','banners','cats'].includes(t)) this.mainTab = 'apps';
       if (['version','notice'].includes(t)) this.mainTab = 'publish';
-      if (['about','contrib','crash'].includes(t)) this.mainTab = 'settings';
+      if (['about','contrib','crash','harm'].includes(t)) this.mainTab = 'settings';
       if (t === 'stats') this.loadStats();
       if (t === 'apps') this.loadApps();
       if (t === 'banners') this.loadBanners();
@@ -735,6 +762,7 @@ createApp({
       if (t === 'notice') this.loadNotice();
       if (t === 'contrib') this.loadContributors();
       if (t === 'crash') this.loadCrashReports();
+      if (t === 'harm') this.loadHarmReports();
     },
     // 底部导航主 tab 切换
     setMain(m) {
@@ -747,13 +775,36 @@ createApp({
       }
       else if (m === 'apps') { if (!['apps','banners','cats'].includes(this.tab)) this.tab = 'apps'; this.loadApps(); }
       else if (m === 'publish') { if (!['version','notice'].includes(this.tab)) this.tab = 'version'; this.loadVersion(); }
-      else if (m === 'settings') { if (!['about','contrib','crash'].includes(this.tab)) this.tab = 'about'; this.loadAbout(); }
+      else if (m === 'settings') { if (!['about','contrib','crash','harm'].includes(this.tab)) this.tab = 'about'; this.loadAbout(); }
     },
     async loadCrashReports() {
       try {
         const r = await this.api('crash_reports', {}, 'POST');
         if (r.code === 0) this.crashes = r.data || [];
       } catch (e) { this.toast('崩溃日志加载失败'); }
+    },
+    async loadHarmReports() {
+      try {
+        const r = await this.api('harm_reports', {}, 'POST');
+        if (r.code === 0) this.harms = r.data || [];
+      } catch (e) { this.toast('反馈加载失败'); }
+    },
+    async markHarm(id, status) {
+      try {
+        const r = await this.api('harm_report_status', { id, status }, 'POST');
+        if (r.code !== 0) { this.toast(r.msg || '操作失败'); return; }
+        this.toast(status == 1 ? '已标记为已处理' : '已重新打开');
+        this.loadHarmReports();
+      } catch (e) { this.toast('操作失败'); }
+    },
+    async deleteHarm(id) {
+      if (!confirm('确定删除这条反馈吗？')) return;
+      try {
+        const r = await this.api('harm_report_delete', { id }, 'POST');
+        if (r.code !== 0) { this.toast(r.msg || '删除失败'); return; }
+        this.toast('已删除');
+        this.loadHarmReports();
+      } catch (e) { this.toast('删除失败'); }
     },
     async loadContributors() {
       try {

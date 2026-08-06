@@ -135,6 +135,18 @@ CREATE TABLE IF NOT EXISTS crash_reports (
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- 反馈和谐 (App 端「反馈和谐」提交, 管理端「设置→和谐」查看)
+CREATE TABLE IF NOT EXISTS harm_reports (
+  id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  app_id INT UNSIGNED DEFAULT 0,
+  app_name VARCHAR(100) DEFAULT '',
+  content TEXT,
+  contact VARCHAR(100) DEFAULT '',
+  status TINYINT DEFAULT 0,
+  ip VARCHAR(45) DEFAULT '',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 -- 软件新版本标志 + 发布日期 (2026-08-03, 2026-08-03 修订为 new_until 到期制, 再修订为纯手动)
 -- 「新版本」= new_until 未过期 (is_new 动态 = new_until > NOW(), 不再手工写入)
 --   规则 (纯手动, 无任何自动):
