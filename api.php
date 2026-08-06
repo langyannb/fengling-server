@@ -824,13 +824,23 @@ try {
             if (trim($content) === '') json_error('请填写哪里被和谐了', 400);
             $contact = (string)param('contact', '');
             if (mb_strlen($contact) > 100) $contact = mb_substr($contact, 0, 100);
+            // 防恶意刷反馈 (2026-08-07):
+            // ① 同 IP 60 秒内最多 1 条 (频率限制)
+            // ② 同 IP 同一软件 10 分钟内最多 1 条 (防反复刷同一软件)
+            $ip = client_ip();
+            $st = db()->prepare("SELECT COUNT(*) FROM harm_reports WHERE ip = ? AND created_at > (NOW() - INTERVAL 60 SECOND)");
+            $st->execute([$ip]);
+            if ((int)$st->fetchColumn() > 0) json_error('提交太频繁，请稍后再试', 429);
+            $st = db()->prepare("SELECT COUNT(*) FROM harm_reports WHERE ip = ? AND app_id = ? AND created_at > (NOW() - INTERVAL 600 SECOND)");
+            $st->execute([$ip, (int)param('app_id', 0)]);
+            if ((int)$st->fetchColumn() > 0) json_error('该软件刚刚反馈过，请勿重复提交', 429);
             db()->prepare("INSERT INTO harm_reports (app_id, app_name, content, contact, ip) VALUES (?, ?, ?, ?, ?)")
                 ->execute([
                     (int)param('app_id', 0),
                     mb_substr((string)param('app_name', ''), 0, 100),
                     $content,
                     $contact,
-                    client_ip(),
+                    $ip,
                 ]);
             json_out(null);
 
