@@ -39,18 +39,23 @@
         </a-button>
       </template>
       <div class="tip">投稿人投稿的应用: 在「软件」里编辑软件时填写「投稿人 QQ」即可关联, 此处会自动显示 ta 投稿了哪些软件。</div>
-      <a-table :data="contributors" :loading="loading" row-key="id" size="small">
+      <!-- 横向总宽: 80+130+160+200+80+280+140 = 1070, 手机端由 tableScroll 兜底 >=720 -->
+      <a-table :data="contributors" :loading="loading" row-key="id" size="small" :scroll="scrollX">
         <template #columns>
           <a-table-column title="头像" :width="80">
             <template #cell="{ record }">
               <img class="avatar" :src="qqAvatar(record.qq)" alt="" />
             </template>
           </a-table-column>
-          <a-table-column title="QQ" data-index="qq" :width="130" />
+          <a-table-column title="QQ" :width="130">
+            <template #cell="{ record }">
+              <span class="qq-cell">{{ record.qq }}</span>
+            </template>
+          </a-table-column>
           <a-table-column title="昵称" :width="160">
             <template #cell="{ record }">{{ record.name || record.qq }}</template>
           </a-table-column>
-          <a-table-column title="投稿说明">
+          <a-table-column title="投稿说明" :width="200">
             <template #cell="{ record }">{{ record.bio || '暂无说明' }}</template>
           </a-table-column>
           <a-table-column title="排序" data-index="sort_order" :width="80" />
@@ -78,6 +83,7 @@
     <a-modal
       v-model:visible="showContrib"
       :title="'编辑投稿人 ' + contribForm.qq"
+      :width="modalWidth(600)"
       @ok="saveContributor"
       :ok-loading="saving"
       unmount-on-close
@@ -90,7 +96,8 @@
           <a-input v-model="contribForm.bio" placeholder="一句话说明" allow-clear />
         </a-form-item>
         <a-form-item field="sort_order" label="排序 (小的在前)">
-          <a-input-number v-model="contribForm.sort_order" :min="0" :precision="0" style="width:180px;" />
+          <!-- 手机铺满, 桌面限宽 180px -->
+          <a-input-number v-model="contribForm.sort_order" :min="0" :precision="0" :style="numStyle" />
         </a-form-item>
       </a-form>
     </a-modal>
@@ -98,11 +105,18 @@
 </template>
 
 <script setup>
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import { api, pickList } from '../api'
+import { isMobile, modalWidth, tableScroll } from '../composables/useResponsive'
 
 const QQ_RE = /^\d{5,12}$/
+
+// 表格横向滚动宽度 (computed, 手机端 >=720)
+const scrollX = tableScroll(1070)
+
+// 排序输入框宽度: 手机 100%, 桌面 180px
+const numStyle = computed(() => (isMobile.value ? { width: '100%' } : { width: '180px' }))
 
 const contributors = ref([])
 const loading = ref(false)
@@ -214,5 +228,25 @@ onMounted(load)
 <style scoped>
 .tip { font-size: 12px; color: var(--color-text-3); margin-bottom: 12px; }
 .muted { color: var(--color-text-3); }
-.avatar { width: 44px; height: 44px; border-radius: 50%; object-fit: cover; display: block; }
+
+/* 头像: 固定尺寸不被压缩, 保持圆形 */
+.avatar {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  object-fit: cover;
+  display: block;
+  flex: 0 0 auto;
+}
+/* 头像列 / QQ 列: 恒定宽, 不挤压 (手机上靠横滑查看) */
+.qq-cell { display: inline-block; white-space: nowrap; font-variant-numeric: tabular-nums; }
+:deep(.arco-table-td) { vertical-align: middle; }
+:deep(.arco-table-td .arco-tag) { margin: 2px 4px 2px 0; }
+
+/* ---- 手机 / 竖屏窄屏 (<=820px) ---- */
+@media (max-width: 820px) {
+  .avatar { width: 40px; height: 40px; }
+  /* 表头不换行, 避免列名折行把表格撑乱 */
+  :deep(.arco-table-th) { white-space: nowrap; }
+}
 </style>

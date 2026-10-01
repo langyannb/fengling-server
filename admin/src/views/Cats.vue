@@ -12,18 +12,19 @@
       <span class="muted">共 {{ list.length }} 个分类 (顶级 {{ topCats.length }} 个)</span>
     </div>
 
-    <a-table :data="sortedCats" :loading="loading" row-key="id" size="small">
+    <!-- 横向总宽: 70+180+140+140+90+160 = 780, 取 820 留余量, 手机端由 tableScroll 兜底 >=720 -->
+    <a-table :data="sortedCats" :loading="loading" row-key="id" size="small" :scroll="scrollX">
       <template #columns>
         <a-table-column title="图标" :width="70">
           <template #cell="{ record }">
             <img v-if="record.icon" class="thumb" :src="record.icon" />
-            <a-avatar v-else :size="28" :style="{ backgroundColor: record.color || '#4C6FFF' }">
+            <a-avatar v-else :size="40" :style="{ backgroundColor: record.color || '#4C6FFF' }">
               {{ (record.name || '?')[0] }}
             </a-avatar>
           </template>
         </a-table-column>
 
-        <a-table-column title="名称">
+        <a-table-column title="名称" :width="180">
           <template #cell="{ record }">
             <span v-if="record.parent_id" class="muted">子分类 · </span>{{ record.name }}
           </template>
@@ -32,7 +33,7 @@
         <a-table-column title="父分类" :width="140">
           <template #cell="{ record }">
             <a-tag v-if="record.parent_id" color="arcoblue">{{ catName(record.parent_id) || '未知' }}</a-tag>
-            <span v-else class="muted">顶级分类</span>
+            <a-tag v-else color="gray">顶级分类</a-tag>
           </template>
         </a-table-column>
 
@@ -48,9 +49,9 @@
         <a-table-column title="操作" :width="160">
           <template #cell="{ record }">
             <a-space>
-              <a-button size="mini" type="text" @click="openCat(record)">编辑</a-button>
+              <a-button type="text" size="small" @click="openCat(record)">编辑</a-button>
               <a-popconfirm content="确认删除该分类?" @ok="delCat(record)">
-                <a-button size="mini" type="text" status="danger">删除</a-button>
+                <a-button type="text" size="small" status="danger">删除</a-button>
               </a-popconfirm>
             </a-space>
           </template>
@@ -62,6 +63,7 @@
     <a-modal
       v-model:visible="showCat"
       :title="form.id ? '编辑分类' : '添加分类'"
+      :width="modalWidth(600)"
       :ok-loading="saving"
       unmount-on-close
       @ok="saveCat"
@@ -98,7 +100,7 @@
               </div>
             </template>
           </a-upload>
-          <a-button v-if="form.icon" size="mini" type="text" status="danger" @click="form.icon = ''">
+          <a-button v-if="form.icon" type="text" size="small" status="danger" @click="form.icon = ''">
             清除图标
           </a-button>
           <a-progress v-if="uploading" :percent="progress" size="small" style="margin-top: 6px" />
@@ -130,6 +132,10 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import { api, uploadFile, pickList } from '../api'
+import { modalWidth, tableScroll } from '../composables/useResponsive'
+
+// 表格横向滚动: 桌面按列宽总和, 手机端至少 720
+const scrollX = tableScroll(820)
 
 // 与原后台 catForm 默认色一致
 const COLORS = ['#4C6FFF', '#22B07D', '#FF8F1F', '#FF4D6D', '#7C4DFF', '#00B8D4', '#FFB300', '#F5455C']
@@ -279,14 +285,7 @@ onMounted(load)
   color: var(--color-text-3);
   font-size: 13px;
 }
-.thumb {
-  width: 32px;
-  height: 32px;
-  object-fit: cover;
-  border-radius: 4px;
-  border: 1px solid var(--color-border-2);
-  vertical-align: middle;
-}
+/* 缩略图统一走全局 .thumb, 这里不再覆写尺寸 */
 .dot {
   display: inline-block;
   width: 16px;
@@ -326,10 +325,11 @@ onMounted(load)
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(0, 0, 0, 0.45);
-  color: #fff;
+  background: var(--color-mask-bg, rgba(0, 0, 0, 0.45));
+  color: var(--color-white, #fff);
   font-size: 13px;
 }
+/* 颜色块与列表内的颜色圆点统一圆角与描边 */
 .color-row {
   display: flex;
   align-items: center;
@@ -339,11 +339,29 @@ onMounted(load)
 .color-swatch {
   width: 28px;
   height: 28px;
-  border-radius: 8px;
+  border-radius: 4px;
+  border: 1px solid var(--color-border-2);
   cursor: pointer;
   outline-offset: 2px;
 }
 .color-swatch--on {
-  outline: 2px solid rgb(var(--gray-8));
+  outline: 2px solid var(--color-text-2);
+}
+
+/* ============ 手机 (<=820px) ============ */
+@media (max-width: 820px) {
+  .page-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  /* 上传控件占满一行, 触摸更好点 */
+  .up-box {
+    width: 100%;
+    max-width: 100%;
+  }
+  .color-swatch {
+    width: 32px;
+    height: 32px;
+  }
 }
 </style>

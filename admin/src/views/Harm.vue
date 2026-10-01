@@ -15,6 +15,7 @@
       :data="harms"
       :loading="loading"
       :pagination="pagination"
+      :scroll="scroll"
       row-key="id"
       size="small"
     >
@@ -30,7 +31,8 @@
             <span v-else class="sub">—</span>
           </template>
         </a-table-column>
-        <a-table-column title="原因" data-index="content">
+        <!-- 原因列给足宽度，长文本靠 ellipsis 展开，不挤压其它列 -->
+        <a-table-column title="原因" data-index="content" :width="320">
           <template #cell="{ record }">
             <a-typography-paragraph
               v-if="record.content"
@@ -54,25 +56,28 @@
             <a-tag v-else color="orange">待处理</a-tag>
           </template>
         </a-table-column>
+        <!-- 操作列固定右侧，手机端横滑时按钮始终可见且不换行 -->
         <a-table-column title="操作" :width="170" fixed="right">
           <template #cell="{ record }">
-            <a-button
-              v-if="record.status == 0"
-              type="text"
-              size="small"
-              :loading="busyId === record.id"
-              @click="markHarm(record.id, 1)"
-            >✅ 已处理</a-button>
-            <a-button
-              v-else
-              type="text"
-              size="small"
-              :loading="busyId === record.id"
-              @click="markHarm(record.id, 0)"
-            >↩ 重开</a-button>
-            <a-popconfirm content="确定删除这条反馈吗？" @ok="deleteHarm(record.id)">
-              <a-button type="text" status="danger" size="small">🗑 删除</a-button>
-            </a-popconfirm>
+            <a-space :size="2" :wrap="false">
+              <a-button
+                v-if="record.status == 0"
+                type="text"
+                size="small"
+                :loading="busyId === record.id"
+                @click="markHarm(record.id, 1)"
+              >✅ 已处理</a-button>
+              <a-button
+                v-else
+                type="text"
+                size="small"
+                :loading="busyId === record.id"
+                @click="markHarm(record.id, 0)"
+              >↩ 重开</a-button>
+              <a-popconfirm content="确定删除这条反馈吗？" @ok="deleteHarm(record.id)">
+                <a-button type="text" status="danger" size="small">🗑 删除</a-button>
+              </a-popconfirm>
+            </a-space>
           </template>
         </a-table-column>
       </template>
@@ -85,6 +90,8 @@
 import { onMounted, ref } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import { api, pickList } from '../api'
+// 响应式：手机端表格横向滚动（tableScroll 返回 computed）
+import { tableScroll } from '../composables/useResponsive'
 
 const harms = ref([])
 const loading = ref(false)
@@ -95,6 +102,9 @@ const pagination = ref({
   showPageSize: true,
   pageSizeOptions: [10, 20, 50],
 })
+
+// 软件 180 + QQ 150 + 原因 320 + IP 140 + 时间 170 + 状态 90 + 操作 170 = 1220
+const scroll = tableScroll(1220)
 
 async function load() {
   loading.value = true
@@ -155,4 +165,10 @@ onMounted(load)
   word-break: break-all;
 }
 .content :deep(.arco-typography) { margin-bottom: 0; }
+
+/* 手机端：操作按钮不换行、不互相挤压 */
+@media (max-width: 820px) {
+  :deep(.arco-table-td .arco-space) { flex-wrap: nowrap; }
+  :deep(.arco-table-td .arco-space-item) { flex: 0 0 auto; }
+}
 </style>

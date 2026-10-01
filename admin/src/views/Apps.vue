@@ -1,12 +1,30 @@
 <template>
   <div>
     <a-card :bordered="false" class="page-card">
+      <!-- 筛选工具栏：手机端自动换行、逐行铺满 -->
       <div class="page-toolbar">
-        <a-input v-model="kw" placeholder="搜索软件名 / 包名 / 投稿QQ" allow-clear style="width: 240px">
+        <a-input
+          v-model="kw"
+          class="grow"
+          placeholder="搜索软件名 / 包名 / 投稿QQ"
+          allow-clear
+          :style="isMobile ? 'width:100%' : 'width:240px'"
+        >
           <template #prefix><icon-search /></template>
         </a-input>
-        <a-select v-model="filterCat" placeholder="全部分类" allow-clear style="width: 180px" :options="catFilterOptions" />
-        <a-select v-model="filterStatus" style="width: 140px" :options="statusOptions" />
+        <a-select
+          v-model="filterCat"
+          placeholder="全部分类"
+          allow-clear
+          :options="catFilterOptions"
+          :style="isMobile ? 'width:calc(50% - 3px)' : 'width:180px'"
+        />
+        <a-select
+          v-model="filterStatus"
+          :options="statusOptions"
+          :style="isMobile ? 'width:calc(50% - 3px)' : 'width:140px'"
+        />
+        <div class="toolbar-spacer"></div>
         <a-button type="primary" @click="openApp()">
           <template #icon><icon-plus /></template>添加软件
         </a-button>
@@ -20,6 +38,7 @@
         row-key="id"
         size="small"
         :loading="loading"
+        :scroll="scrollX"
         :pagination="{ pageSize: 20, showTotal: true, showPageSize: true }"
       >
         <template #columns>
@@ -47,7 +66,7 @@
             <template #cell="{ record }">
               <a-tag v-if="Number(record.is_top)" size="small" color="orange">置顶</a-tag>
               <a-tag v-if="Number(record.is_featured)" size="small" color="gold">精选</a-tag>
-              <span v-if="!Number(record.is_top) && !Number(record.is_featured)">-</span>
+              <span v-if="!Number(record.is_top) && !Number(record.is_featured)" class="text-muted">-</span>
             </template>
           </a-table-column>
           <a-table-column title="下载" data-index="download_count" :width="90" />
@@ -55,9 +74,9 @@
           <a-table-column title="排序" data-index="sort_order" :width="80" />
           <a-table-column title="操作" :width="140" fixed="right">
             <template #cell="{ record }">
-              <a-button type="text" size="mini" @click="openApp(record)">编辑</a-button>
+              <a-button type="text" size="small" @click="openApp(record)">编辑</a-button>
               <a-popconfirm content="确认删除该软件?" @ok="delApp(record)">
-                <a-button type="text" status="danger" size="mini">删除</a-button>
+                <a-button type="text" status="danger" size="small">删除</a-button>
               </a-popconfirm>
             </template>
           </a-table-column>
@@ -69,7 +88,7 @@
     <a-modal
       v-model:visible="showApp"
       :title="appForm.id ? '编辑软件' : '添加软件'"
-      width="720px"
+      :width="modalWidth(720)"
       :ok-loading="saving"
       ok-text="保存软件"
       cancel-text="取消"
@@ -82,12 +101,12 @@
           <a-input v-model="appForm.name" placeholder="软件名" />
         </a-form-item>
         <a-row :gutter="12">
-          <a-col :span="12">
+          <a-col :span="isMobile ? 24 : 12">
             <a-form-item field="category_id" label="分类">
               <a-select v-model="appForm.category_id" :options="catOptions" />
             </a-form-item>
           </a-col>
-          <a-col :span="12">
+          <a-col :span="isMobile ? 24 : 12">
             <a-form-item field="version" label="版本">
               <a-input v-model="appForm.version" placeholder="1.0" />
             </a-form-item>
@@ -128,7 +147,7 @@
 
         <a-divider orientation="left">发布设置</a-divider>
         <a-row :gutter="12">
-          <a-col :span="12">
+          <a-col :span="isMobile ? 24 : 12">
             <a-form-item field="release_date" label="发布日期 (显示用)">
               <a-date-picker
                 :model-value="appForm.release_date || undefined"
@@ -138,14 +157,14 @@
               />
             </a-form-item>
           </a-col>
-          <a-col :span="12">
+          <a-col :span="isMobile ? 24 : 12">
             <a-form-item field="sort_order" label="排序 (已改为按时间, 保留备用)">
               <a-input-number v-model="appForm.sort_order" :min="0" style="width: 100%" />
             </a-form-item>
           </a-col>
         </a-row>
         <a-row :gutter="12">
-          <a-col :span="12">
+          <a-col :span="isMobile ? 24 : 12">
             <a-form-item label="状态">
               <a-switch :model-value="!!Number(appForm.is_active)" @change="onActiveChange">
                 <template #checked>上架</template>
@@ -153,7 +172,7 @@
               </a-switch>
             </a-form-item>
           </a-col>
-          <a-col :span="12">
+          <a-col :span="isMobile ? 24 : 12">
             <a-form-item label="标记">
               <a-switch :model-value="!!Number(appForm.is_top)" @change="v => (appForm.is_top = v ? 1 : 0)">
                 <template #checked>🔝 置顶</template>
@@ -163,7 +182,7 @@
           </a-col>
         </a-row>
         <a-row :gutter="12">
-          <a-col :span="12">
+          <a-col :span="isMobile ? 24 : 12">
             <a-form-item label="精选">
               <a-switch :model-value="!!Number(appForm.is_featured)" @change="v => (appForm.is_featured = v ? 1 : 0)">
                 <template #checked>⭐ 精选</template>
@@ -171,7 +190,7 @@
               </a-switch>
             </a-form-item>
           </a-col>
-          <a-col :span="12">
+          <a-col :span="isMobile ? 24 : 12">
             <a-form-item label="新版本标 (选新=3天后回普通)">
               <a-select v-model="appForm.is_new" :options="newOptions" @change="newFlagTouched = true" />
             </a-form-item>
@@ -201,12 +220,12 @@
         <a-button long style="margin-bottom: 8px" @click="addLink()">+ 添加网盘链接</a-button>
         <div v-for="link in editingLinks" :key="'e' + link._k" class="link-editor">
           <a-row :gutter="12">
-            <a-col :span="12">
+            <a-col :span="isMobile ? 24 : 12">
               <a-form-item label="类型">
                 <a-select v-model="link.pan_type" :options="panOptions" />
               </a-form-item>
             </a-col>
-            <a-col :span="12">
+            <a-col :span="isMobile ? 24 : 12">
               <a-form-item label="名称">
                 <a-input v-model="link.label" />
               </a-form-item>
@@ -228,6 +247,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import { api, pickList, uploadFile } from '../api'
+import { isMobile, modalWidth, tableScroll } from '../composables/useResponsive'
 
 const loading = ref(false)
 const saving = ref(false)
@@ -236,6 +256,9 @@ const cats = ref([])
 const kw = ref('')
 const filterCat = ref('')
 const filterStatus = ref('')
+
+// 表格横向滚动宽度: 所有列宽合计 1372px (桌面按此宽度, 手机端至少 720px)
+const scrollX = tableScroll(1372)
 
 const showApp = ref(false)
 const uploading = ref('')
@@ -461,29 +484,59 @@ async function delApp(app) {
 onMounted(loadAll)
 </script>
 
+<!-- 说明: .page-toolbar / .thumb 的通用样式定义在 styles/global.css, 此处不再重复, 以继承其手机端规则 -->
 <style scoped>
-.page-toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 14px; }
-.thumb { width: 48px; height: 48px; object-fit: cover; border-radius: 8px; display: block; }
+/* 桌面端把操作按钮推到右侧; 手机端隐藏(按钮换行平分) */
+.toolbar-spacer { flex: 1 1 auto; min-width: 0; }
+
 .app-name { font-weight: 600; margin-right: 6px; }
+.text-muted { color: var(--color-text-3); }
+
 .upload-box {
-  width: 96px; height: 96px; border: 1.5px dashed #C9CDD4; border-radius: 8px;
+  width: 96px; height: 96px; border: 1.5px dashed var(--color-border-2); border-radius: 8px;
   display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: 4px; cursor: pointer; position: relative; overflow: hidden; color: #86909C; font-size: 12px;
-  background: rgb(var(--gray-1));
+  gap: 4px; cursor: pointer; position: relative; overflow: hidden;
+  color: var(--color-text-3); font-size: 12px;
+  background: var(--color-fill-1);
 }
 .upload-box:hover { border-color: rgb(var(--primary-6)); color: rgb(var(--primary-6)); }
 .upload-box-sm { width: 108px; height: 108px; flex-shrink: 0; }
 .upload-img { width: 100%; height: 100%; object-fit: cover; }
 .upload-plus { font-size: 24px; line-height: 1; }
-.up-tip { position: absolute; inset: 0; background: rgba(0, 0, 0, .45); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 12px; }
+.up-tip {
+  position: absolute; inset: 0; background: rgba(0, 0, 0, .45); color: var(--color-white);
+  display: flex; align-items: center; justify-content: center; font-size: 12px;
+}
 .up-txt { font-size: 11px; text-align: center; padding: 4px; line-height: 1.4; }
+
 .shot-wrap { display: flex; flex-wrap: wrap; gap: 10px; }
-.shot-item { position: relative; width: 108px; height: 108px; border-radius: 8px; overflow: hidden; border: 1.5px solid #E8EAF2; }
+.shot-item { position: relative; width: 108px; height: 108px; border-radius: 8px; overflow: hidden; border: 1.5px solid var(--color-border-2); }
 .shot-img { width: 100%; height: 100%; object-fit: cover; }
-.shot-del { position: absolute; top: 2px; right: 2px; background: rgba(245, 69, 92, .9); color: #fff; width: 20px; height: 20px; border: none; border-radius: 50%; font-size: 12px; line-height: 20px; padding: 0; cursor: pointer; }
-.form-tip { font-size: 12px; color: #86909C; line-height: 1.6; margin: -4px 0 12px; }
-.link-item { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid #E5E6EB; border-radius: 6px; margin-bottom: 8px; }
+.shot-del {
+  position: absolute; top: 2px; right: 2px; background: rgb(var(--danger-6)); color: var(--color-white);
+  width: 20px; height: 20px; border: none; border-radius: 50%; font-size: 12px;
+  line-height: 20px; padding: 0; cursor: pointer;
+}
+
+.form-tip { font-size: 12px; color: var(--color-text-3); line-height: 1.6; margin: -4px 0 12px; }
+
+.link-item {
+  display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+  border: 1px solid var(--color-border-2); border-radius: 6px; margin-bottom: 8px;
+}
 .link-info { flex: 1; min-width: 0; font-size: 13px; }
-.link-url { color: #86909C; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.link-editor { background: rgb(var(--gray-1)); padding: 12px; border-radius: 6px; margin-bottom: 8px; }
+.link-url { color: var(--color-text-3); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.link-editor { background: var(--color-fill-1); padding: 12px; border-radius: 6px; margin-bottom: 8px; }
+
+/* 手机端微调: 工具栏按钮铺满、缩略图收紧、链接行可换行 */
+@media (max-width: 820px) {
+  .toolbar-spacer { display: none; }
+  .upload-box { width: 84px; height: 84px; }
+  .upload-box-sm, .shot-item { width: 92px; height: 92px; }
+  .shot-wrap { gap: 8px; }
+  .link-item { flex-wrap: wrap; row-gap: 6px; }
+  .link-info { flex: 1 1 100%; }
+  .link-item .arco-btn { flex: 1 1 auto; }
+  .link-editor { padding: 10px; }
+}
 </style>

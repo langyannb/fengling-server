@@ -7,7 +7,24 @@
         </a-button>
       </template>
 
-      <a-form :model="verForm" layout="vertical" :style="{ maxWidth: '720px' }">
+      <!-- 当前版本概览: 手机 1 列 / 平板 2 列 / 桌面 3 列, 不横向溢出 -->
+      <div class="ver-overview">
+        <div class="overview-title">当前版本概览 (随表单同步)</div>
+        <a-grid :cols="{ xs: 1, sm: 2, md: 3 }" :col-gap="12" :row-gap="12">
+          <a-grid-item v-for="it in overviewItems" :key="it.label">
+            <div class="ov-item">
+              <span class="ov-label">{{ it.label }}</span>
+              <span class="ov-value">
+                <a-tag v-if="it.tag" :color="it.color" size="small">{{ it.value }}</a-tag>
+                <span v-else-if="it.mono" class="ov-url">{{ it.value }}</span>
+                <template v-else>{{ it.value }}</template>
+              </span>
+            </div>
+          </a-grid-item>
+        </a-grid>
+      </div>
+
+      <a-form :model="verForm" layout="vertical" :style="formStyle">
         <a-form-item field="version" label="版本号" required>
           <a-input v-model="verForm.version" placeholder="1.0.1" allow-clear />
         </a-form-item>
@@ -25,7 +42,7 @@
           </div>
           <input ref="apkInput" type="file" accept=".apk" class="hidden-input" @change="onApkChange" />
           <div v-if="uploading" class="up-tip">
-            <span>上传中...</span>
+            <span class="up-text">上传中...</span>
             <a-progress :percent="uploadPercent / 100" :show-text="false" size="small" />
             <span class="pct">{{ uploadPercent }}%</span>
           </div>
@@ -73,9 +90,9 @@
         </a-row>
 
         <a-form-item>
-          <a-space>
+          <a-space class="form-actions">
             <a-button type="primary" :loading="saving" @click="saveVersion">发布版本</a-button>
-            <a-button @click="loadVersion">重置</a-button>
+            <a-button :loading="loading" @click="loadVersion">重置</a-button>
           </a-space>
         </a-form-item>
       </a-form>
@@ -84,9 +101,10 @@
 </template>
 
 <script setup>
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import { api, uploadFile } from '../api'
+import { isMobile } from '../composables/useResponsive'
 
 const MAX_APK_SIZE = 200 * 1024 * 1024 // 200MB
 
@@ -95,6 +113,9 @@ const loading = ref(false)
 const saving = ref(false)
 const uploading = ref(false)
 const uploadPercent = ref(0)
+
+// 表单最大宽度: 手机铺满, 桌面限制 720px 便于阅读
+const formStyle = computed(() => ({ maxWidth: isMobile.value ? '100%' : '720px' }))
 
 const defaultForm = () => ({
   version: '1.0.0',
@@ -107,6 +128,29 @@ const defaultForm = () => ({
 })
 
 const verForm = ref(defaultForm())
+
+// 概览卡片数据 (纯展示, 由 loadVersion 回填的表单派生)
+const overviewItems = computed(() => {
+  const f = verForm.value
+  return [
+    { label: '版本号', value: f.version || '—' },
+    {
+      label: '更新方式',
+      value: f.update_mode === 'external' ? '外置更新' : '内置更新',
+      tag: true,
+      color: f.update_mode === 'external' ? 'orange' : 'arcoblue',
+    },
+    {
+      label: '强制更新',
+      value: Number(f.force_update) ? '强制' : '非强制',
+      tag: true,
+      color: Number(f.force_update) ? 'red' : 'gray',
+    },
+    { label: 'APK 大小', value: (Number(f.size_mb) || 0) + ' MB' },
+    { label: '发布日期', value: f.release_date || '—' },
+    { label: '下载地址', value: f.url || '—', mono: true },
+  ]
+})
 
 async function loadVersion() {
   loading.value = true
@@ -193,6 +237,26 @@ onMounted(loadVersion)
 
 <style scoped>
 .page-card { margin-bottom: 16px; }
+
+/* ---- 版本概览 ---- */
+.ver-overview { margin-bottom: 18px; }
+.overview-title { font-size: 12px; color: var(--color-text-3); margin-bottom: 8px; }
+.ov-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 40px;
+  padding: 6px 10px;
+  border: 1px solid var(--color-border-1);
+  border-radius: 8px;
+  background: var(--color-fill-1);
+}
+.ov-label { flex: 0 0 auto; font-size: 12px; color: var(--color-text-3); }
+.ov-value { min-width: 0; text-align: right; font-size: 13px; color: var(--color-text-1); }
+.ov-url { display: block; max-width: 100%; font-size: 12px; word-break: break-all; color: var(--color-text-2); }
+
+/* ---- APK 上传区 ---- */
 .upload-box {
   display: flex;
   flex-direction: column;
@@ -212,17 +276,33 @@ onMounted(loadVersion)
 .upload-box:hover { border-color: rgb(var(--primary-6)); background: rgb(var(--primary-1)); }
 .upload-box .plus { font-size: 24px; color: rgb(var(--primary-6)); }
 .upload-box .ok { font-size: 20px; }
-.upload-box .url-text { word-break: break-all; font-size: 13px; color: var(--color-text-2); }
+.upload-box .url-text { width: 100%; word-break: break-all; font-size: 13px; color: var(--color-text-2); }
 .hidden-input { display: none; }
+
+/* ---- 上传进度: 整行铺满 ---- */
 .up-tip {
   display: flex;
   align-items: center;
   gap: 8px;
+  width: 100%;
   margin-top: 8px;
   font-size: 13px;
   color: var(--color-text-2);
 }
-.up-tip .arco-progress { flex: 1; }
-.up-tip .pct { width: 42px; text-align: right; }
+.up-tip .up-text { flex: 0 0 auto; }
+.up-tip .arco-progress { flex: 1 1 auto; min-width: 0; }
+.up-tip .pct { flex: 0 0 auto; width: 42px; text-align: right; }
 .tip { margin-top: 6px; font-size: 12px; color: var(--color-text-3); }
+
+/* ---- 手机 / 竖屏窄屏 (<=820px) ---- */
+@media (max-width: 820px) {
+  .ver-overview { margin-bottom: 14px; }
+  .ov-item { min-height: 44px; }        /* 触摸目标更友好 */
+  .upload-box { min-height: 120px; }    /* 手机上留够点击面积 */
+  .up-tip { flex-wrap: wrap; gap: 6px; }
+  .up-tip .arco-progress { flex: 1 1 120px; }
+  .up-tip .pct { width: 38px; }
+  .form-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+  .form-actions .arco-btn { flex: 1 1 auto; }
+}
 </style>

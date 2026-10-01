@@ -1,5 +1,7 @@
 <template>
   <div class="login-page">
+    <div class="glow glow-a" />
+    <div class="glow glow-b" />
     <a-card class="login-card" :bordered="false">
       <div class="brand">
         <div class="brand-mark">风</div>
@@ -56,12 +58,74 @@ async function login() {
 </script>
 
 <style scoped>
-.login-page { height: 100vh; display: flex; align-items: center; justify-content: center; background: linear-gradient(135deg, #eef3ff 0%, #f7f8fa 60%, #eafaf3 100%); }
-.login-card { width: 380px; box-shadow: 0 10px 30px rgba(0, 0, 0, .08); border-radius: 14px; }
-.brand { display: flex; align-items: center; gap: 12px; margin-bottom: 22px; }
-.brand-mark { width: 44px; height: 44px; border-radius: 12px; background: rgb(var(--primary-6)); color: #fff; font-size: 20px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
+.login-page {
+  position: relative;
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  overflow: hidden;
+  background: linear-gradient(160deg, #eef4ff 0%, #f7f8fa 45%, #eafaf3 100%);
+}
+/* 背景光斑, 纯装饰 */
+.glow {
+  position: absolute;
+  width: 340px;
+  height: 340px;
+  border-radius: 50%;
+  filter: blur(64px);
+  opacity: 0.55;
+  pointer-events: none;
+}
+.glow-a { background: rgba(22, 93, 255, 0.30); top: -90px; left: -70px; }
+.glow-b { background: rgba(0, 180, 42, 0.22); bottom: -110px; right: -80px; }
+
+.login-card {
+  position: relative;
+  z-index: 1;
+  width: min(380px, 92vw);
+  border-radius: 16px;
+  box-shadow: 0 12px 36px rgba(21, 45, 90, 0.10);
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 22px;
+}
+.brand-mark {
+  width: 46px;
+  height: 46px;
+  border-radius: 13px;
+  background: linear-gradient(135deg, rgb(var(--primary-5)), rgb(var(--primary-7)));
+  color: #fff;
+  font-size: 21px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  box-shadow: 0 4px 12px rgba(var(--primary-6), 0.32);
+}
 .brand-title { font-size: 18px; font-weight: 600; }
 .brand-sub { font-size: 12px; color: var(--color-text-3); }
 .err { margin-bottom: 12px; }
-.tip { margin-top: 16px; text-align: center; font-size: 12px; color: var(--color-text-3); }
+.tip {
+  margin-top: 16px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--color-text-3);
+}
+
+@media (max-width: 820px) {
+  .login-page {
+    align-items: flex-start;
+    padding: 16px;
+    padding-top: 10vh;
+  }
+  .login-card { border-radius: 14px; }
+  .login-card :deep(.arco-card-body) { padding: 20px 18px; }
+}
 </style>

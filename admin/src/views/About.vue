@@ -9,7 +9,9 @@
         </a-space>
       </template>
 
+      <!-- layout="vertical" 下标签恒在输入框上方，auto-label-width 对竖向布局无影响，保留以兼容横向切换 -->
       <a-form :model="form" layout="vertical" auto-label-width>
+        <a-divider class="form-divider" orientation="left">首屏横幅</a-divider>
         <a-row :gutter="16">
           <a-col :xs="24" :md="12">
             <a-form-item field="banner_text" label="横幅标题">
@@ -21,6 +23,10 @@
               <a-input v-model="form.banner_sub" placeholder="最新软件 · 更新通知 · 交流反馈" allow-clear />
             </a-form-item>
           </a-col>
+        </a-row>
+
+        <a-divider class="form-divider" orientation="left">QQ 群</a-divider>
+        <a-row :gutter="16">
           <a-col :xs="24" :md="12">
             <a-form-item field="qq_group" label="QQ 群号">
               <a-input v-model="form.qq_group" placeholder="740266099" allow-clear />
@@ -36,6 +42,10 @@
               <a-input v-model="form.qq_url" placeholder="http://qm.qq.com/cgi-bin/qm/qr?..." allow-clear />
             </a-form-item>
           </a-col>
+        </a-row>
+
+        <a-divider class="form-divider" orientation="left">外部链接</a-divider>
+        <a-row :gutter="16">
           <a-col :xs="24" :md="12">
             <a-form-item field="website" label="官网链接">
               <a-input v-model="form.website" placeholder="https://..." allow-clear />
@@ -58,10 +68,12 @@
           </a-col>
         </a-row>
 
-        <a-space>
-          <a-button type="primary" :loading="saving" @click="save">保存配置</a-button>
-          <a-button :loading="loading" @click="load">重置</a-button>
-        </a-space>
+        <div class="form-footer">
+          <div class="footer-actions">
+            <a-button :loading="loading" @click="load">重置</a-button>
+            <a-button type="primary" :loading="saving" @click="save">保存配置</a-button>
+          </div>
+        </div>
       </a-form>
     </a-card>
   </div>
@@ -145,4 +157,25 @@ onMounted(load)
 
 <style scoped>
 .page-card { margin-bottom: 16px; }
+/* 分组小标题，长表单更易读 */
+.form-divider { margin: 0 0 16px; }
+.form-divider :deep(.arco-divider-text) {
+  font-size: 13px;
+  color: var(--color-text-2);
+  background: transparent;
+}
+/* 保存区：桌面右对齐 */
+.form-footer {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+.footer-actions { display: flex; gap: 8px; }
+
+/* 手机端：表单单列（a-col :xs="24" 已保证），按钮等宽铺满 */
+@media (max-width: 820px) {
+  .form-footer { justify-content: stretch; }
+  .footer-actions { width: 100%; }
+  .footer-actions > .arco-btn { flex: 1 1 0; }
+}
 </style>

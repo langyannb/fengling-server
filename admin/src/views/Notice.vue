@@ -6,6 +6,7 @@
           <a-form :model="form" layout="vertical">
             <a-form-item field="content" label="公告内容 (富文本编辑器, 支持加粗/颜色/链接/图片)">
               <div class="editor-wrap">
+                <!-- 手机上工具栏横向滚动不换行, 桌面自动换行 -->
                 <div class="editor-toolbar">
                   <a-button-group size="small">
                     <a-tooltip content="加粗"><a-button @mousedown.prevent @click="execCmd('bold')"><template #icon><icon-bold /></template></a-button></a-tooltip>
@@ -59,7 +60,7 @@
 
             <div class="tip">App 端会显示「今日不再提示」复选框, 勾选后当天不再弹出 (每日模式下)。</div>
 
-            <a-space>
+            <a-space class="form-actions">
               <a-button type="primary" :loading="saving" @click="saveNotice">保存公告</a-button>
               <a-button :loading="loading" @click="loadNotice">重置</a-button>
             </a-space>
@@ -72,7 +73,8 @@
           <template #extra><a-tag :color="form.enabled ? 'green' : 'gray'">{{ form.enabled ? '启用中' : '已停用' }}</a-tag></template>
 
           <div class="phone">
-            <div class="phone-mask">
+            <!-- 手机壳宽度: 手机上自适应铺满, 桌面固定 300px -->
+            <div class="phone-mask" :style="{ maxWidth: isMobile ? '100%' : '300px' }">
               <div class="notice-dialog">
                 <div class="notice-title">公告</div>
                 <div class="notice-body">
@@ -96,7 +98,13 @@
       </a-col>
     </a-row>
 
-    <a-modal v-model:visible="linkVisible" title="插入链接" unmount-on-close @ok="confirmLink">
+    <a-modal
+      v-model:visible="linkVisible"
+      title="插入链接"
+      :width="modalWidth(600)"
+      unmount-on-close
+      @ok="confirmLink"
+    >
       <a-form :model="linkForm" layout="vertical">
         <a-form-item field="url" label="链接地址 (http:// 或 https:// 开头)">
           <a-input v-model="linkForm.url" placeholder="https://" allow-clear />
@@ -115,6 +123,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import { api, uploadFile } from '../api'
+import { isMobile, modalWidth } from '../composables/useResponsive'
 
 const form = reactive({ content: '', mode: 'daily', enabled: 0 })
 const loading = ref(false)
@@ -260,17 +269,33 @@ onBeforeUnmount(() => document.removeEventListener('selectionchange', trackSelec
 .page-card { margin-bottom: 16px; }
 .hint { font-size: 11px; color: var(--color-text-3); }
 .tip { font-size: 12px; color: var(--color-text-3); margin-bottom: 14px; }
+
+/* ---- 富文本编辑器 ---- */
 .editor-wrap { width: 100%; }
-.editor-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
-.etb-color { width: 34px; height: 28px; padding: 0 2px; border: 1px solid var(--color-border-2); border-radius: 4px; background: #fff; cursor: pointer; }
+.editor-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.etb-color {
+  width: 34px;
+  height: 28px;
+  padding: 0 2px;
+  border: 1px solid var(--color-border-2);
+  border-radius: 4px;
+  background: var(--color-bg-2);
+  cursor: pointer;
+}
 .editor-area {
-  min-height: 180px;
+  min-height: 180px;          /* 用 min-height, 手机上给足高度 */
   max-height: 420px;
   overflow: auto;
   padding: 8px 10px;
   border: 1px solid var(--color-border-2);
   border-radius: 4px;
-  background: #fff;
+  background: var(--color-bg-2);
   font-size: 14px;
   line-height: 1.7;
   outline: none;
@@ -280,16 +305,43 @@ onBeforeUnmount(() => document.removeEventListener('selectionchange', trackSelec
 .editor-area:empty::before { content: attr(data-placeholder); color: var(--color-text-3); pointer-events: none; }
 .editor-area :deep(img) { max-width: 100%; }
 .hidden-file { display: none; }
+
+/* ---- 手机预览壳 ---- */
 .phone { display: flex; justify-content: center; padding: 8px 0 4px; }
-.phone-mask { width: 100%; max-width: 300px; border-radius: 12px; background: rgba(0, 0, 0, .45); padding: 22px 14px; }
-.notice-dialog { background: #fff; border-radius: 10px; padding: 14px 14px 10px; box-shadow: 0 6px 20px rgba(0, 0, 0, .18); }
-.notice-title { font-size: 15px; font-weight: 700; text-align: center; margin-bottom: 10px; color: #1d2129; }
-.notice-body { max-height: 220px; overflow: auto; }
-.notice-text { font-size: 13px; line-height: 1.7; color: #4e5969; word-break: break-word; }
+.phone-mask { width: 100%; border-radius: 12px; background: var(--color-mask-bg); padding: 22px 14px; }
+.notice-dialog { background: var(--color-bg-2); border-radius: 10px; padding: 14px 14px 10px; box-shadow: 0 6px 20px rgba(0, 0, 0, .18); }
+.notice-title { font-size: 15px; font-weight: 700; text-align: center; margin-bottom: 10px; color: var(--color-text-1); }
+.notice-body { max-height: 220px; min-height: 120px; overflow: auto; }
+.notice-text { font-size: 13px; line-height: 1.7; color: var(--color-text-2); word-break: break-word; }
 .notice-text :deep(img) { max-width: 100%; }
 .notice-text :deep(a) { color: rgb(var(--primary-6)); }
-.notice-empty { font-size: 13px; color: #c9cdd4; text-align: center; padding: 12px 0; }
-.notice-foot { display: flex; align-items: center; justify-content: space-between; margin-top: 12px; padding-top: 10px; border-top: 1px solid #f2f3f5; }
+.notice-empty { font-size: 13px; color: var(--color-text-4); text-align: center; padding: 12px 0; }
+.notice-foot { display: flex; align-items: center; justify-content: space-between; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--color-border-1); }
 .notice-ok { font-size: 13px; color: rgb(var(--primary-6)); font-weight: 600; }
 .preview-meta { font-size: 12px; color: var(--color-text-3); margin-top: 10px; line-height: 1.9; }
+
+/* ---- 手机 / 竖屏窄屏 (<=820px) ---- */
+@media (max-width: 820px) {
+  /* 工具栏: 横向滚动, 不换行、不溢出压坏布局 */
+  .editor-toolbar {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: 4px;
+  }
+  .editor-toolbar > * { flex: 0 0 auto; }
+  /* 手机上编辑区高度按视口比例给足, 避免只看到两三行 */
+  .editor-area { min-height: 46vh; max-height: 60vh; }
+  .etb-color { width: 38px; height: 30px; }
+
+  /* 预览壳: 手机上左右留白收紧, 宽度自适应 */
+  .phone { padding: 4px 0; }
+  .phone-mask { padding: 16px 10px; }
+  .notice-body { max-height: 40vh; }
+  .preview-meta { margin-top: 8px; line-height: 1.8; }
+
+  .form-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+  .form-actions .arco-btn { flex: 1 1 auto; }
+}
 </style>

@@ -12,16 +12,17 @@
       <span class="muted">共 {{ list.length }} 条</span>
     </div>
 
-    <a-table :data="list" :loading="loading" row-key="id" size="small">
+    <!-- 横向总宽: 130+200+260+90+100+160 = 940, 取 940, 手机端由 tableScroll 兜底 >=720 -->
+    <a-table :data="list" :loading="loading" row-key="id" size="small" :scroll="scrollX">
       <template #columns>
         <a-table-column title="图片" :width="130">
           <template #cell="{ record }">
-            <img v-if="record.image" class="thumb" :src="record.image" />
+            <img v-if="record.image" class="thumb thumb--wide" :src="record.image" />
             <span v-else class="muted">未上传</span>
           </template>
         </a-table-column>
 
-        <a-table-column title="标题" data-index="title">
+        <a-table-column title="标题" :width="200">
           <template #cell="{ record }">{{ record.title || '未命名' }}</template>
         </a-table-column>
 
@@ -46,9 +47,9 @@
         <a-table-column title="操作" :width="160">
           <template #cell="{ record }">
             <a-space>
-              <a-button size="mini" type="text" @click="openBanner(record)">编辑</a-button>
+              <a-button type="text" size="small" @click="openBanner(record)">编辑</a-button>
               <a-popconfirm content="删除该轮播?" @ok="delBanner(record)">
-                <a-button size="mini" type="text" status="danger">删除</a-button>
+                <a-button type="text" size="small" status="danger">删除</a-button>
               </a-popconfirm>
             </a-space>
           </template>
@@ -60,6 +61,7 @@
     <a-modal
       v-model:visible="showBanner"
       :title="form.id ? '编辑轮播' : '添加轮播'"
+      :width="modalWidth(600)"
       :ok-loading="saving"
       unmount-on-close
       @ok="save"
@@ -100,13 +102,14 @@
           </a-select>
         </a-form-item>
 
+        <!-- 手机端排序/状态各占整行, 桌面保持半宽 -->
         <a-row :gutter="16">
-          <a-col :span="12">
+          <a-col :span="isMobile ? 24 : 12">
             <a-form-item field="sort_order" label="排序">
               <a-input-number v-model="form.sort_order" :min="0" style="width: 100%" />
             </a-form-item>
           </a-col>
-          <a-col :span="12">
+          <a-col :span="isMobile ? 24 : 12">
             <a-form-item field="is_active" label="状态">
               <a-switch v-model="form.is_active" :checked-value="1" :unchecked-value="0" />
               <span class="muted" style="margin-left: 8px">
@@ -124,6 +127,10 @@
 import { onMounted, reactive, ref } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import { api, uploadFile, pickList } from '../api'
+import { isMobile, modalWidth, tableScroll } from '../composables/useResponsive'
+
+// 表格横向滚动: 桌面按列宽总和, 手机端至少 720
+const scrollX = tableScroll(940)
 
 const list = ref([])
 const apps = ref([])
@@ -259,16 +266,17 @@ onMounted(() => {
   justify-content: space-between;
   margin-bottom: 12px;
 }
-.thumb {
-  width: 100px;
-  height: 48px;
-  object-fit: cover;
-  border-radius: 4px;
-  border: 1px solid var(--color-border-2);
-}
 .muted {
   color: var(--color-text-3);
   font-size: 13px;
+}
+/* 轮播图是 16:9 横图, 在全局 .thumb 基础上只放宽比例 (用双类名提高优先级) */
+.thumb.thumb--wide {
+  width: 100px;
+  height: 48px;
+  object-fit: cover;
+  border-radius: 6px;
+  vertical-align: middle;
 }
 .up-box {
   position: relative;
@@ -300,8 +308,21 @@ onMounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(0, 0, 0, 0.45);
-  color: #fff;
+  background: var(--color-mask-bg, rgba(0, 0, 0, 0.45));
+  color: var(--color-white, #fff);
   font-size: 13px;
+}
+
+/* ============ 手机 (<=820px) ============ */
+@media (max-width: 820px) {
+  .page-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  /* 上传控件占满一行 */
+  .up-box {
+    width: 100%;
+    max-width: 100%;
+  }
 }
 </style>
