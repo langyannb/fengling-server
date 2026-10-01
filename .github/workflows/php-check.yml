@@ -1,0 +1,65 @@
+name: 服务端检查
+
+# 服务端不自动部署, 只做语法与静态检查; 部署由 Actions 手动触发
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: php-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: PHP 语法检查
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@v4
+
+      - name: 配置 PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          tools: none
+
+      - name: 逐文件语法检查
+        run: |
+          fail=0
+          for f in $(git ls-files '*.php'); do
+            if php -l "$f"; then :; else fail=1; fi
+          done
+          echo "----"
+          if [ "$fail" -ne 0 ]; then
+            echo "::error::存在 PHP 语法错误"
+            exit 1
+          fi
+          echo "全部 PHP 文件语法通过"
+
+      - name: 密钥泄露自查
+        run: |
+          if git grep -nEi "ghp_[A-Za-z0-9]{20,}|BEGIN [A-Z ]*PRIVATE KEY" -- . ; then
+            echo "::error::检出疑似凭据, 请移入 GitHub Secrets"
+            exit 1
+          fi
+          echo "无明文凭据"
+
+  package:
+    name: 打包发布产物
+    needs: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 生成部署包 (不含 config.php)
+        run: |
+          mkdir -p dist
+          rsync -a --exclude '.git' --exclude 'config.php' --exclude '.github' ./ dist/
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: fengling-server-${{ github.ref_name }}-${{ github.run_number }}
+          path: dist/
+          retention-days: 30
