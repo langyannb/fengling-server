@@ -60,6 +60,6 @@ jobs:
       - name: 上传产物
         uses: actions/upload-artifact@v4
         with:
-          name: fengling-server-${{ github.ref_name }}-${{ github.run_number }}
+          name: fengling-server-${{ github.run_number }}-${{ github.sha }}
           path: dist/
           retention-days: 30
