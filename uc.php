@@ -1,4 +1,9 @@
 <?php
+// 防止该文件被直接访问（仅允许被 api.php include）
+if (isset($_SERVER['SCRIPT_FILENAME']) && basename($_SERVER['SCRIPT_FILENAME']) === 'uc.php') {
+    http_response_code(404);
+    exit;
+}
 /**
  * uc.php — UC 网盘（drive.uc.cn）扫码登录 + 分享链接解析
  * 依赖：curl 扩展（宝塔 PHP 默认已开）
