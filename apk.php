@@ -165,33 +165,119 @@ class ApkParser
     private static function pickIcon(ZipArchive $zip): ?array
     {
         $density = array('xxxhdpi' => 60, 'xxhdpi' => 50, 'xhdpi' => 40, 'hdpi' => 30, 'mdpi' => 20, 'nodpi' => 10);
-        $cands = array();
+        $exact = array();
+        $round = array();
+        $other = array();
+        $fore  = array();
+        $back  = array();
+
         for ($i = 0; $i < $zip->numFiles; $i++) {
             $n = $zip->getNameIndex($i);
             if (!preg_match('#^res/(mipmap|drawable)[^/]*/([^/]+)\.(png|webp|jpg)$#i', $n, $m)) continue;
             $base = strtolower($m[2]);
-            $isLauncher = (strpos($base, 'ic_launcher') !== false || strpos($base, 'app_icon') !== false || $base === 'icon');
+            $dens = 0;
+            foreach ($density as $k2 => $w) { if (strpos($n, $k2) !== false) { $dens = $w; break; } }
+            $item = array('path' => $n, 'ext' => strtolower($m[3]), 'dens' => $dens);
+
+            // 自适应图标的分层资源不能单独当图标用
+            if (strpos($base, 'monochrome') !== false) continue;
+            if (strpos($base, 'fore') !== false) { $fore[] = $item; continue; }
+            if (strpos($base, 'back') !== false) { $back[] = $item; continue; }
+
+            $isLauncher = (strpos($base, 'ic_launcher') !== false || strpos($base, 'app_icon') !== false
+                || strpos($base, 'ic_icon') !== false || $base === 'icon');
             if (!$isLauncher) continue;
-            $score = 0;
-            foreach ($density as $k => $w) { if (strpos($n, $k) !== false) { $score = $w; break; } }
-            if (strpos($n, 'mipmap') !== false) $score += 5;
-            if (strpos($base, 'round') !== false) $score -= 2;
-            $cands[] = array('path' => $n, 'score' => $score, 'ext' => strtolower($m[3]));
+            if ($base === 'ic_launcher' || $base === 'app_icon' || $base === 'icon') { $exact[] = $item; continue; }
+            if (strpos($base, 'round') !== false) { $round[] = $item; continue; }
+            $other[] = $item;
         }
-        if (!$cands) return null;
-        usort($cands, function ($a, $b) { return $b['score'] - $a['score']; });
+
+        // 1) 完整图标（ic_launcher.png 优先级最高，其次圆形，再其它命名）
+        foreach (array($exact, $round, $other) as $grp) {
+            $got = self::bestOfGroup($zip, $grp);
+            if ($got !== null) return $got;
+        }
+        // 2) 只有自适应分层时：背景 + 前景合成，再按 72/108 裁切
+        return self::composeAdaptive($zip, $fore, $back);
+    }
+
+    /** 同组候选里取密度最高、像素最多且能解码的那张 */
+    private static function bestOfGroup(ZipArchive $zip, array $grp): ?array
+    {
+        if (!$grp) return null;
+        usort($grp, function ($a, $b) { return $b['dens'] - $a['dens']; });
         $best = null;
-        foreach (array_slice($cands, 0, 6) as $c) {
+        $bestPx = -1;
+        foreach (array_slice($grp, 0, 6) as $c) {
             $data = $zip->getFromName($c['path']);
             if ($data === false || $data === '') continue;
-            $px = 0;
             $sz = @getimagesizefromstring($data);
-            if (is_array($sz)) $px = (int)$sz[0] * (int)$sz[1];
-            if ($best === null || $px > $best['px']) {
-                $best = array('path' => $c['path'], 'ext' => $c['ext'], 'data' => $data, 'px' => $px);
+            if (!is_array($sz)) continue;
+            $px = (int)$sz[0] * (int)$sz[1];
+            if ($px > $bestPx) {
+                $bestPx = $px;
+                $best = array('data' => $data, 'ext' => $c['ext'], 'path' => $c['path'], 'px' => $px);
             }
         }
         if ($best === null) return null;
-        return array('path' => $best['path'], 'ext' => $best['ext'], 'data' => $best['data']);
+        return array('data' => $best['data'], 'ext' => $best['ext'], 'path' => $best['path']);
+    }
+
+    /** 合成自适应图标：背景铺满 + 前景叠加，按 Android 规范裁中央 72/108 作为最终图标 */
+    private static function composeAdaptive(ZipArchive $zip, array $fore, array $back): ?array
+    {
+        if (!$fore || !function_exists('imagecreatefromstring')) return null;
+        usort($fore, function ($a, $b) { return $b['dens'] - $a['dens']; });
+        $f = $fore[0];
+        $b = null;
+        foreach ($back as $c) { if ($c['dens'] === $f['dens']) { $b = $c; break; } }
+        if ($b === null && $back) {
+            usort($back, function ($a, $b2) { return $b2['dens'] - $a['dens']; });
+            $b = $back[0];
+        }
+        $fi = @imagecreatefromstring($zip->getFromName($f['path']));
+        if (!$fi) return null;
+        $w = imagesx($fi);
+        $h = imagesy($fi);
+        if ($w < 8 || $h < 8) { imagedestroy($fi); return null; }
+
+        $canvas = imagecreatetruecolor($w, $h);
+        imagesavealpha($canvas, true);
+        imagealphablending($canvas, false);
+        imagefill($canvas, 0, 0, imagecolorallocatealpha($canvas, 0, 0, 0, 127));
+
+        if ($b !== null) {
+            $bi = @imagecreatefromstring($zip->getFromName($b['path']));
+            if ($bi) {
+                imagealphablending($canvas, true);
+                imagecopyresampled($canvas, $bi, 0, 0, 0, 0, $w, $h, imagesx($bi), imagesy($bi));
+                imagedestroy($bi);
+            }
+        }
+        imagealphablending($canvas, true);
+        imagecopyresampled($canvas, $fi, 0, 0, 0, 0, $w, $h, $w, $h);
+        imagedestroy($fi);
+
+        $side = (int)round($w * 0.6667);
+        $x = (int)round(($w - $side) / 2);
+        $y = (int)round(($h - $side) / 2);
+        $crop = imagecreatetruecolor($side, $side);
+        imagesavealpha($crop, true);
+        imagealphablending($crop, false);
+        imagefill($crop, 0, 0, imagecolorallocatealpha($crop, 0, 0, 0, 127));
+        imagecopy($crop, $canvas, 0, 0, $x, $y, $side, $side);
+
+        ob_start();
+        imagepng($crop);
+        $out = ob_get_clean();
+        imagedestroy($canvas);
+        imagedestroy($crop);
+        if (!is_string($out) || $out === '') return null;
+
+        return array(
+            'data' => $out,
+            'ext'  => 'png',
+            'path' => $f['path'] . ' + ' . ($b !== null ? $b['path'] : '(无背景)') . ' [合成裁切]',
+        );
     }
 }
