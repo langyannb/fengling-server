@@ -51,7 +51,10 @@ export async function api(action, params = {}, method = 'GET') {
     return { code: -1, msg: '网络错误' }
   }
   let body
-  try { body = await res.json() } catch { body = { code: -1, msg: '响应解析失败' } }
+  try { body = await res.json() } catch {
+    const snippet = (await res.text().catch(() => '')).replace(/\s+/g, ' ').slice(0, 140)
+    body = { code: -1, msg: `响应解析失败 (HTTP ${res.status})` + (snippet ? ': ' + snippet : '') }
+  }
   if (res.status === 401 || body.code === 401) { onUnauthorized(); return { code: 401, msg: '未登录' } }
   return body
 }
@@ -67,7 +70,10 @@ export async function uploadFile(action, file, onProgress) {
     if (onProgress) xhr.upload.onprogress = (e) => e.lengthComputable && onProgress(Math.round(e.loaded * 100 / e.total))
     xhr.onload = () => {
       let r = { code: -1, msg: '响应解析失败' }
-      try { r = JSON.parse(xhr.responseText) } catch {}
+      try { r = JSON.parse(xhr.responseText) } catch {
+        const snippet = (xhr.responseText || '').replace(/\s+/g, ' ').slice(0, 140)
+        r = { code: -1, msg: `上传失败 (HTTP ${xhr.status})` + (snippet ? ': ' + snippet : '') }
+      }
       if (xhr.status === 401 || r.code === 401) onUnauthorized()
       resolve(r)
     }

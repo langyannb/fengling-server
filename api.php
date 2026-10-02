@@ -3,6 +3,20 @@
 // 所有接口统一走这里: /api.php?action=xxx
 // 抑制 PHP 8.x deprecated 警告 (imagedestroy/curl_close 等无效果但会污染 JSON 响应)
 error_reporting(E_ALL & ~E_DEPRECATED & ~E_NOTICE & ~E_WARNING);
+// GD 解码大图按 宽*高*4 字节占内存, 默认 128M 上传大图会 OOM 致命错误 -> 前端拿到 HTML 报「响应解析失败」
+@ini_set('memory_limit', '512M');
+// 把 PHP 致命错误也转成 JSON, 前端永远拿到 {code,msg} 而不是错误页
+register_shutdown_function(function () {
+    $e = error_get_last();
+    if (!$e || !in_array($e['type'], [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR], true)) return;
+    if (headers_sent()) return;
+    http_response_code(500);
+    header('Content-Type: application/json; charset=utf-8');
+    echo json_encode([
+        'code' => -1,
+        'msg'  => '服务器错误: ' . $e['message'] . ' @ ' . basename($e['file']) . ':' . $e['line'],
+    ], JSON_UNESCAPED_UNICODE);
+});
 require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/uc.php';
 require_once __DIR__ . '/apk.php';
@@ -130,6 +144,9 @@ function s3_key(string $dir, string $ext): string {
 
 /** 图片压缩 (GD): 压到 maxWidth 宽内 + JPEG 质量 80, 返回压缩后字节 */
 function compress_image(string $data, string $ext, int $maxWidth = 1600, int $quality = 80): string {
+    // 保护: 先读图片头部尺寸, 超过 6000 万像素不解码 (原样上传), 避免 GD 吃掉几百 MB 内存
+    $info = @getimagesizefromstring($data);
+    if ($info && !empty($info[0]) && !empty($info[1]) && ($info[0] * $info[1]) > 60000000) return $data;
     $img = @imagecreatefromstring($data);
     if (!$img) return $data; // 无法解析, 原样返回
     $w = imagesx($img);
@@ -152,6 +169,7 @@ function compress_image(string $data, string $ext, int $maxWidth = 1600, int $qu
         imagepng($img, null, 7);
     }
     $out = ob_get_clean();
+    @imagedestroy($img);
     return $out ?: $data;
 }
 
@@ -427,6 +445,7 @@ try {
         // ============ 图片上传 (管理) ============
         case 'upload':
             require_admin();
+            @set_time_limit(300);
             if (empty($_FILES['file'])) json_error('未收到文件');
             $file = $_FILES['file'];
             $ext = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
