@@ -42,6 +42,11 @@
               <a-input v-model="form.qq_url" placeholder="http://qm.qq.com/cgi-bin/qm/qr?..." allow-clear />
             </a-form-item>
           </a-col>
+          <a-col :xs="24">
+            <a-form-item field="qq_channel" label="QQ 频道链接">
+              <a-input v-model="form.qq_channel" placeholder="https://pd.qq.com/s/..." allow-clear />
+            </a-form-item>
+          </a-col>
         </a-row>
 
         <a-divider class="form-divider" orientation="left">外部链接</a-divider>
@@ -93,6 +98,7 @@ const form = reactive({
   qq_group: '',
   qq_key: '',
   qq_url: '',
+  qq_channel: '',
   website: '',
   github: '',
   feedback: '',
@@ -110,6 +116,7 @@ async function load() {
         qq_group: r.data.qq_group || '',
         qq_key: r.data.qq_key || '',
         qq_url: r.data.qq_url || '',
+        qq_channel: r.data.qq_channel || '',
         website: r.data.website || '',
         github: r.data.github || '',
         feedback: r.data.feedback || '',
@@ -132,6 +139,7 @@ async function save() {
       qq_group: form.qq_group,
       qq_key: form.qq_key,
       qq_url: form.qq_url,
+      qq_channel: form.qq_channel,
       website: form.website,
       github: form.github,
       feedback: form.feedback,

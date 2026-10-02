@@ -648,6 +648,7 @@ try {
                 'qq_group' => '',      // QQ 群号
                 'qq_key' => '',        // qq 加群 key (mqqapi 用)
                 'qq_url' => '',        // 加群网页链接
+                'qq_channel' => '',    // QQ 频道链接
                 'website' => '',       // 官网
                 'github' => '',        // GitHub
                 'feedback' => '',      // 反馈
@@ -663,6 +664,7 @@ try {
                 'qq_group' => param('qq_group', ''),
                 'qq_key' => param('qq_key', ''),
                 'qq_url' => param('qq_url', ''),
+                'qq_channel' => param('qq_channel', ''),
                 'website' => param('website', ''),
                 'github' => param('github', ''),
                 'feedback' => param('feedback', ''),
