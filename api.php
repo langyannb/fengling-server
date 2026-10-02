@@ -5,6 +5,7 @@
 error_reporting(E_ALL & ~E_DEPRECATED & ~E_NOTICE & ~E_WARNING);
 require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/uc.php';
+require_once __DIR__ . '/apk.php';
 
 header('Access-Control-Allow-Origin: *');
 header('Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS');
@@ -928,6 +929,78 @@ try {
                 if (in_array($f['ext'], ['apk', 'zip', 'rar', '7z', 'xapk', 'apks'])) $d['suggest']['packages'][] = $f['name'];
             }
             json_out($d);
+
+        case 'uc_import':
+            require_admin();
+            @set_time_limit(600);
+            $auth = UcDrive::loadAuth();
+            if (empty($auth['cookie'])) json_error('UC 账号未登录，请先扫码登录', 401);
+            $want = param('kind', 'all');
+            $raw  = UcDrive::resolve(param('url', ''), param('pwd', ''));
+            if ((int)$raw['code'] !== 0) json_error($raw['msg'], (int)$raw['code'] === 401 ? 401 : 502);
+            $key    = $raw['data']['share_key'];
+            $stoken = isset($raw['data']['stoken']) ? $raw['data']['stoken'] : '';
+            $cookie = $auth['cookie'];
+            $files  = $raw['data']['files'];
+            $result = array('images' => array(), 'apk' => null, 'errors' => array());
+
+            if ($want === 'images' || $want === 'all') {
+                foreach ($files as $f) {
+                    if (!empty($f['isdir'])) continue;
+                    if (!in_array($f['ext'], array('jpg', 'jpeg', 'png', 'webp', 'gif'), true)) continue;
+                    if (count($result['images']) >= 15) break;
+                    $tmp = UcDrive::downloadToTmp($key, $stoken, $f['fid'], $f['fid_token'], $cookie);
+                    if ($tmp === '') { $result['errors'][] = '下载失败: ' . $f['name']; continue; }
+                    $data = @file_get_contents($tmp);
+                    @unlink($tmp);
+                    if ($data === false || $data === '') { $result['errors'][] = '读取失败: ' . $f['name']; continue; }
+                    $ext = $f['ext'] === 'jpeg' ? 'jpg' : $f['ext'];
+                    $data = compress_image($data, $ext, 1600, 82);
+                    $objKey = s3_key('screenshots', $ext);
+                    $mime = ($ext === 'jpg') ? 'image/jpeg' : 'image/' . $ext;
+                    if (s3_upload_bytes($data, $objKey, $mime)) {
+                        $result['images'][] = S3_PUBLIC_URL . '/' . $objKey;
+                    } else {
+                        $result['errors'][] = '上传失败: ' . $f['name'];
+                    }
+                }
+            }
+
+            if ($want === 'apk' || $want === 'all') {
+                $apk = null;
+                foreach ($files as $f) {
+                    if (!empty($f['isdir']) || $f['ext'] !== 'apk') continue;
+                    if ($apk === null || $f['size'] > $apk['size']) $apk = $f;
+                }
+                if ($apk === null) {
+                    $result['errors'][] = '分享里没有 apk 文件';
+                } else {
+                    $tmp = UcDrive::downloadToTmp($key, $stoken, $apk['fid'], $apk['fid_token'], $cookie);
+                    if ($tmp === '') {
+                        $result['errors'][] = '安装包下载失败（可能超过服务器限制）';
+                    } else {
+                        $p = ApkParser::parse($tmp);
+                        @unlink($tmp);
+                        $iconUrl = '';
+                        if (!empty($p['icon_data'])) {
+                            $ext = in_array($p['icon_ext'], array('png', 'webp', 'jpg'), true) ? $p['icon_ext'] : 'png';
+                            $objKey = s3_key('icons', $ext);
+                            $mime = ($ext === 'jpg') ? 'image/jpeg' : 'image/' . $ext;
+                            if (s3_upload_bytes($p['icon_data'], $objKey, $mime)) $iconUrl = S3_PUBLIC_URL . '/' . $objKey;
+                        }
+                        $result['apk'] = array(
+                            'file'         => $apk['name'],
+                            'size_mb'      => $apk['size_mb'],
+                            'package'      => $p['package'],
+                            'version_name' => $p['version_name'],
+                            'version_code' => $p['version_code'],
+                            'icon_url'     => $iconUrl,
+                        );
+                        if (!empty($p['error'])) $result['errors'][] = $p['error'];
+                    }
+                }
+            }
+            json_out($result);
 
         default:
             json_error('未知操作: ' . $action, 404);

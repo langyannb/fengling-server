@@ -118,7 +118,11 @@
                 · {{ ucSuggest.size_mb }} MB
                 · 共 {{ ucFiles.length }} 个文件
               </span>
-              <a-button size="mini" type="primary" @click="applyUc">一键填入表单</a-button>
+              <a-space>
+                <a-button size="mini" :loading="ucImporting" @click="doUcImport('images')">导入截图到图库</a-button>
+                <a-button size="mini" :loading="ucImporting" @click="doUcImport('apk')">解析安装包信息</a-button>
+                <a-button size="mini" type="primary" @click="applyUc">一键填入表单</a-button>
+              </a-space>
             </div>
             <a-table
               :columns="ucColumns"
@@ -304,6 +308,7 @@ const origLinkIds = ref([])
 const ucUrl = ref('')
 const ucPwd = ref('')
 const ucLoading = ref(false)
+const ucImporting = ref(false)
 const ucError = ref('')
 const ucFiles = ref([])
 const ucSuggest = ref({ name: '', version: '', size_mb: 0, kind: '', has_apk: false, images: [], packages: [] })
@@ -482,6 +487,43 @@ async function doUcResolve() {
   ucFiles.value = (r.data && r.data.files) || []
   if (r.data && r.data.suggest) ucSuggest.value = r.data.suggest
   Message.success('解析成功，共 ' + ucFiles.value.length + ' 个文件')
+}
+
+/** 从 UC 下载并导入图片到图库 / 解析安装包信息（后端下载 APK 并解析包名版本图标） */
+async function doUcImport(kind) {
+  if (!ucUrl.value.trim()) { Message.warning('请先粘贴 UC 分享链接并解析'); return }
+  ucImporting.value = true
+  try {
+    const r = await api('uc_import', { url: ucUrl.value.trim(), pwd: ucPwd.value.trim(), kind }, 'POST')
+    if (r.code !== 0) {
+      Message.error(r.msg || '导入失败')
+      if (r.code === 401) Message.warning('UC 账号未登录，请先到「UC 网盘」页扫码登录')
+      return
+    }
+    const d = r.data || {}
+    if (kind === 'images') {
+      const list = d.images || []
+      if (list.length) {
+        appForm.value.screenshots = list
+        Message.success('已导入 ' + list.length + ' 张截图')
+      } else {
+        Message.warning('分享里没有找到图片')
+      }
+    } else {
+      const a = d.apk
+      if (a) {
+        if (a.package) appForm.value.package_name = a.package
+        if (a.version_name && !appForm.value.version) appForm.value.version = a.version_name
+        if (a.icon_url) appForm.value.icon = a.icon_url
+        Message.success('安装包解析完成：' + (a.package || '—') + ' / ' + (a.version_name || '—') + ' / ' + a.size_mb + ' MB')
+      } else {
+        Message.warning('分享里没有找到 apk 文件')
+      }
+    }
+    if (d.errors && d.errors.length) Message.warning(d.errors.join('；'))
+  } finally {
+    ucImporting.value = false
+  }
 }
 
 /** 把解析结果填进表单（名称 / 版本 / 网盘链接） */

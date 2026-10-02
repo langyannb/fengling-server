@@ -138,9 +138,13 @@ class UcDrive
     {
         $h = array(
             'accept: application/json, text/plain, */*',
+            'accept-language: zh-CN,zh;q=0.9,en;q=0.8',
             'content-type: application/json;charset=UTF-8',
             'origin: https://drive.uc.cn',
             'referer: https://drive.uc.cn/',
+            'sec-fetch-dest: empty',
+            'sec-fetch-mode: cors',
+            'sec-fetch-site: same-site',
             'user-agent: ' . self::UA,
         );
         if ($cookie !== '') {
@@ -331,7 +335,7 @@ class UcDrive
         $stoken = isset($j['data']['stoken']) ? $j['data']['stoken'] : '';
         if ($stoken === '') return array('code' => 403, 'msg' => '未取到 stoken');
 
-        $files = self::listDir($key, $stoken, '0', $cookie);
+        $files = self::listDir($key, $stoken, '0', $cookie, $pwd);
         if (isset($files['error'])) return array('code' => 502, 'msg' => $files['error']);
 
         $flat = array();
@@ -341,7 +345,7 @@ class UcDrive
         // 一级子目录展开
         foreach ($files['list'] as $f) {
             if (!empty($f['dir']) && count($flat) < 60) {
-                $sub = self::listDir($key, $stoken, $f['fid'], $cookie);
+                $sub = self::listDir($key, $stoken, $f['fid'], $cookie, $pwd);
                 if (empty($sub['error'])) {
                     foreach ($sub['list'] as $sf) {
                         $n = self::normFile($sf);
@@ -351,15 +355,28 @@ class UcDrive
                 }
             }
         }
-        return array('code' => 0, 'data' => array('share_key' => $key, 'files' => $flat));
+        return array('code' => 0, 'data' => array('share_key' => $key, 'stoken' => $stoken, 'files' => $flat));
     }
 
-    private static function listDir(string $key, string $stoken, string $pdir, string $cookie): array
+    private static function listDir(string $key, string $stoken, string $pdir, string $cookie, string $pwd = ''): array
     {
-        $url = self::API . '/share/sharepage/detail?pr=ucpro&fr=pc'
-             . '&pwd_id=' . urlencode($key) . '&stoken=' . urlencode($stoken)
-             . '&pdir_fid=' . urlencode($pdir) . '&force=0&_page=1&_size=100'
-             . '&_sort=file_type:asc,updated_at:desc';
+        // UC 专用参数: pr=UCBrowser + entry=ft + passcode + _fetch_*
+        $qs = http_build_query(array(
+            'pwd_id'        => $key,
+            'passcode'      => $pwd,
+            'stoken'        => $stoken,
+            'pdir_fid'      => ($pdir === '' ? '0' : $pdir),
+            'force'         => '0',
+            '_page'         => '1',
+            '_size'         => '100',
+            '_fetch_banner' => '1',
+            '_fetch_share'  => '1',
+            '_fetch_total'  => '1',
+            'entry'         => 'ft',
+            'fr'            => 'pc',
+            'pr'            => 'UCBrowser',
+        ));
+        $url = self::API . '/share/sharepage/detail?' . $qs;
         $r = self::req($url, array('method' => 'GET', 'cookie' => $cookie, 'headers' => self::apiHeaders($cookie)));
         $j = json_decode($r['body'], true);
         if (!is_array($j)) return array('error' => 'UC 列表接口无响应 (HTTP ' . $r['status'] . ')');
@@ -372,16 +389,75 @@ class UcDrive
 
     private static function normFile(array $f): array
     {
-        $isDir = (isset($f['dir']) && $f['dir']) || (isset($f['file_type']) && (int)$f['file_type'] === 0 && empty($f['file_name']) === false && !empty($f['dir']));
         return array(
             'name'    => isset($f['file_name']) ? $f['file_name'] : '',
             'size'    => isset($f['size']) ? (int)$f['size'] : 0,
             'size_mb' => isset($f['size']) ? round($f['size'] / 1048576, 2) : 0,
-            'isdir'   => !empty($f['dir']),
+            'isdir'   => self::isDirEntry($f),
             'fid'     => isset($f['fid']) ? $f['fid'] : '',
+            'fid_token' => isset($f['share_fid_token']) ? $f['share_fid_token'] : '',
             'ext'     => strtolower(pathinfo(isset($f['file_name']) ? $f['file_name'] : '', PATHINFO_EXTENSION)),
             'updated' => isset($f['updated_at']) ? $f['updated_at'] : '',
         );
+    }
+
+    /** 判断 UC 列表项是否为文件夹（dir/file 字段优先, 否则 file_type===1 为目录） */
+    private static function isDirEntry(array $f): bool
+    {
+        if (array_key_exists('dir', $f) || array_key_exists('file', $f)) {
+            return !empty($f['dir']) && empty($f['file']);
+        }
+        return (int)(isset($f['file_type']) ? $f['file_type'] : 0) === 1;
+    }
+
+    /** 分享内文件下载直链（用于把图片/安装包拉到服务器） */
+    public static function downloadUrl(string $key, string $stoken, string $fid, string $fidToken, string $cookie): string
+    {
+        $url = self::API . '/file/download?entry=ft&fr=pc&pr=UCBrowser';
+        $r = self::req($url, array(
+            'method'  => 'POST',
+            'cookie'  => $cookie,
+            'headers' => self::apiHeaders($cookie),
+            'body'    => json_encode(array(
+                'fids'       => array($fid),
+                'pwd_id'     => $key,
+                'stoken'     => $stoken,
+                'fids_token' => array($fidToken),
+            ), JSON_UNESCAPED_UNICODE),
+        ));
+        $j = json_decode($r['body'], true);
+        if (is_array($j) && (int)(isset($j['code']) ? $j['code'] : -1) === 0 && !empty($j['data'][0]['download_url'])) {
+            return $j['data'][0]['download_url'];
+        }
+        return '';
+    }
+
+    /** 从分享里流式下载文件到临时文件（大文件不占内存），返回路径（失败返回空串） */
+    public static function downloadToTmp(string $key, string $stoken, string $fid, string $fidToken, string $cookie): string
+    {
+        $dl = self::downloadUrl($key, $stoken, $fid, $fidToken, $cookie);
+        if ($dl === '') return '';
+        $tmp = tempnam(sys_get_temp_dir(), 'ucf_');
+        if ($tmp === false) return '';
+        $fp = @fopen($tmp, 'wb');
+        if ($fp === false) return '';
+        $ch = curl_init($dl);
+        curl_setopt_array($ch, array(
+            CURLOPT_FILE           => $fp,
+            CURLOPT_FOLLOWLOCATION => true,
+            CURLOPT_MAXREDIRS      => 5,
+            CURLOPT_TIMEOUT        => 600,
+            CURLOPT_CONNECTTIMEOUT => 15,
+            CURLOPT_SSL_VERIFYPEER => false,
+            CURLOPT_SSL_VERIFYHOST => 0,
+            CURLOPT_HTTPHEADER     => array('user-agent: ' . self::UA, 'referer: https://drive.uc.cn/'),
+        ));
+        $ok   = curl_exec($ch);
+        $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+        fclose($fp);
+        if (!$ok || $code < 200 || $code >= 300 || (int)@filesize($tmp) === 0) { @unlink($tmp); return ''; }
+        return $tmp;
     }
 
     /** 从文件名推断软件名与版本号 */
