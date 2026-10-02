@@ -85,6 +85,7 @@
                 <span class="m-card-value">{{ record.sort_order }}</span>
               </div>
               <div class="m-card-actions">
+                <a-button type="text" size="small" status="warning" @click="toggleTop(record)">{{ Number(record.is_top) ? "取消置顶" : "置顶" }}</a-button>
                 <a-button type="text" size="small" @click="openApp(record)">编辑</a-button>
                 <a-popconfirm content="确认删除该软件?" @ok="delApp(record)">
                   <a-button type="text" status="danger" size="small">删除</a-button>
@@ -146,6 +147,7 @@
           <a-table-column title="排序" data-index="sort_order" :width="80" />
           <a-table-column title="操作" :width="140" fixed="right">
             <template #cell="{ record }">
+              <a-button type="text" size="small" status="warning" @click="toggleTop(record)">{{ Number(record.is_top) ? "取消置顶" : "置顶" }}</a-button>
               <a-button type="text" size="small" @click="openApp(record)">编辑</a-button>
               <a-popconfirm content="确认删除该软件?" @ok="delApp(record)">
                 <a-button type="text" status="danger" size="small">删除</a-button>
@@ -701,6 +703,16 @@ async function saveApp() {
   } finally {
     saving.value = false
   }
+}
+
+/** 列表一键置顶 / 取消置顶 (只提交 id 与 is_top, 后端增量更新) */
+async function toggleTop(record) {
+  const next = Number(record.is_top) ? 0 : 1
+  const r = await api('app_update', { id: record.id, is_top: next }, 'POST')
+  if (r.code !== 0) { Message.error(r.msg || '操作失败'); return }
+  record.is_top = next
+  Message.success(next ? '已置顶' : '已取消置顶')
+  loadApps()
 }
 
 async function delApp(app) {
