@@ -4,6 +4,7 @@
 // 抑制 PHP 8.x deprecated 警告 (imagedestroy/curl_close 等无效果但会污染 JSON 响应)
 error_reporting(E_ALL & ~E_DEPRECATED & ~E_NOTICE & ~E_WARNING);
 require_once __DIR__ . '/config.php';
+require_once __DIR__ . '/uc.php';
 
 header('Access-Control-Allow-Origin: *');
 header('Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS');
@@ -862,6 +863,71 @@ try {
             db()->prepare("UPDATE harm_reports SET status = ? WHERE id = ?")
                 ->execute([(int)param('status', 0) === 1 ? 1 : 0, (int)param('id', 0)]);
             json_out(null);
+
+        // ============ UC 网盘: 扫码登录 + 分享解析 ============
+        case 'uc_status':
+            require_admin();
+            json_out(UcDrive::status());
+
+        case 'uc_qr_create':
+            require_admin();
+            $uc = UcDrive::qrCreate();
+            if ((int)$uc['code'] !== 0) json_error($uc['msg'], 502);
+            json_out($uc['data']);
+
+        case 'uc_qr_poll':
+            require_admin();
+            $uc = UcDrive::qrPoll(param('token', ''));
+            if ((int)$uc['code'] !== 0) json_error($uc['msg'], (int)$uc['code'] === 400 ? 400 : 502);
+            json_out($uc['data']);
+
+        case 'uc_cookie_set':
+            require_admin();
+            $uc = UcDrive::loginByCookie(param('cookie', ''));
+            if ((int)$uc['code'] !== 0) json_error($uc['msg'], 400);
+            json_out($uc['data']);
+
+        case 'uc_logout':
+            require_admin();
+            UcDrive::clearAuth();
+            json_out(null);
+
+        case 'uc_resolve':
+            require_admin();
+            $uc = UcDrive::resolve(param('url', ''), param('pwd', ''));
+            if ((int)$uc['code'] !== 0) {
+                json_error($uc['msg'], (int)$uc['code'] === 401 ? 401 : ((int)$uc['code'] === 400 || !empty($uc['need_pwd']) ? 400 : 502));
+            }
+            $d = $uc['data'];
+            $rank = ['apk' => 5, 'zip' => 4, 'rar' => 4, '7z' => 4, 'xapk' => 3, 'apks' => 3];
+            $main = null;
+            foreach ($d['files'] as $f) {
+                if (!empty($f['isdir'])) continue;
+                $w = isset($rank[$f['ext']]) ? $rank[$f['ext']] : 1;
+                if ($main === null || $w > $main['_w'] || ($w === $main['_w'] && $f['size'] > $main['size'])) {
+                    $f['_w'] = $w;
+                    $main = $f;
+                }
+            }
+            $guess = ['name' => '', 'version' => ''];
+            if ($main) $guess = UcDrive::guessNameVersion($main['name']);
+            $d['suggest'] = [
+                'file'     => $main ? $main['name'] : '',
+                'name'     => $guess['name'],
+                'version'  => $guess['version'],
+                'size_mb'  => $main ? $main['size_mb'] : 0,
+                'kind'     => $main ? $main['ext'] : '',
+                'has_apk'  => false,
+                'images'   => [],
+                'packages' => [],
+            ];
+            foreach ($d['files'] as $f) {
+                if (!empty($f['isdir'])) continue;
+                if ($f['ext'] === 'apk') $d['suggest']['has_apk'] = true;
+                if (in_array($f['ext'], ['jpg', 'jpeg', 'png', 'webp'])) $d['suggest']['images'][] = $f['name'];
+                if (in_array($f['ext'], ['apk', 'zip', 'rar', '7z', 'xapk', 'apks'])) $d['suggest']['packages'][] = $f['name'];
+            }
+            json_out($d);
 
         default:
             json_error('未知操作: ' . $action, 404);

@@ -96,6 +96,40 @@
       @ok="saveApp"
     >
       <a-form :model="appForm" layout="vertical">
+        <!-- UC 网盘一键解析：粘贴分享链接自动填名称/版本/大小，并把链接加到网盘推广链接 -->
+        <div class="uc-box">
+          <div class="uc-head">
+            <icon-link />
+            <b>UC 网盘一键解析</b>
+            <span class="uc-sub">粘贴分享链接，自动识别名称 / 版本 / 大小与文件清单</span>
+          </div>
+          <a-space wrap>
+            <a-input v-model="ucUrl" allow-clear placeholder="https://drive.uc.cn/s/xxxx" style="width: 300px" />
+            <a-input v-model="ucPwd" allow-clear placeholder="提取码" style="width: 110px" />
+            <a-button type="outline" :loading="ucLoading" @click="doUcResolve">解析</a-button>
+            <a-button size="mini" type="text" @click="goUc">UC 未登录？去扫码</a-button>
+          </a-space>
+          <div v-if="ucError" class="uc-err">{{ ucError }}</div>
+          <div v-if="ucFiles.length" class="uc-result">
+            <div class="uc-suggest">
+              <span>
+                识别结果：<b>{{ ucSuggest.name || '—' }}</b>
+                · 版本 <b>{{ ucSuggest.version || '—' }}</b>
+                · {{ ucSuggest.size_mb }} MB
+                · 共 {{ ucFiles.length }} 个文件
+              </span>
+              <a-button size="mini" type="primary" @click="applyUc">一键填入表单</a-button>
+            </div>
+            <a-table
+              :columns="ucColumns"
+              :data="ucFiles"
+              size="mini"
+              :pagination="false"
+              :scroll="{ y: 180 }"
+            />
+          </div>
+        </div>
+
         <a-divider orientation="left">基本信息</a-divider>
         <a-form-item field="name" label="名称 *" :rules="[{ required: true, message: '请输入软件名' }]">
           <a-input v-model="appForm.name" placeholder="软件名" />
@@ -266,6 +300,19 @@ const uploadProgress = ref('')
 const newFlagTouched = ref(false)
 const origLinkIds = ref([])
 
+// ---- UC 网盘解析 ----
+const ucUrl = ref('')
+const ucPwd = ref('')
+const ucLoading = ref(false)
+const ucError = ref('')
+const ucFiles = ref([])
+const ucSuggest = ref({ name: '', version: '', size_mb: 0, kind: '', has_apk: false, images: [], packages: [] })
+const ucColumns = [
+  { title: '文件', dataIndex: 'name', ellipsis: true, tooltip: true },
+  { title: '类型', dataIndex: 'ext', width: 80 },
+  { title: '大小', width: 100, render: ({ record }) => (record.isdir ? '目录' : record.size_mb + ' MB') },
+]
+
 const emptyForm = () => ({
   id: 0, name: '', category_id: 0, icon: '', version: '', description: '',
   screenshots: [], contributor_qq: '', package_name: '', sort_order: 0,
@@ -411,6 +458,60 @@ async function openApp(app) {
   }
 }
 
+function resetUc() {
+  ucError.value = ''
+  ucFiles.value = []
+  ucSuggest.value = { name: '', version: '', size_mb: 0, kind: '', has_apk: false, images: [], packages: [] }
+}
+
+function goUc() {
+  location.hash = '#/uc'
+}
+
+async function doUcResolve() {
+  if (!ucUrl.value.trim()) { Message.warning('请先粘贴 UC 分享链接'); return }
+  ucLoading.value = true
+  resetUc()
+  const r = await api('uc_resolve', { url: ucUrl.value.trim(), pwd: ucPwd.value.trim() }, 'POST')
+  ucLoading.value = false
+  if (r.code !== 0) {
+    ucError.value = r.msg || '解析失败'
+    if (r.code === 401) Message.error('UC 账号未登录，请先到「UC 网盘」页扫码登录')
+    return
+  }
+  ucFiles.value = (r.data && r.data.files) || []
+  if (r.data && r.data.suggest) ucSuggest.value = r.data.suggest
+  Message.success('解析成功，共 ' + ucFiles.value.length + ' 个文件')
+}
+
+/** 把解析结果填进表单（名称 / 版本 / 网盘链接） */
+function applyUc() {
+  const f = appForm.value
+  const g = ucSuggest.value
+  if (g.name && !f.name) f.name = g.name
+  if (g.version && !f.version) f.version = g.version
+  const url = ucUrl.value.trim()
+  if (url && !f.links.some(l => l.url === url)) {
+    f.links.push({
+      id: 0,
+      app_id: f.id,
+      pan_type: 'uc',
+      label: 'UC网盘',
+      url,
+      password: ucPwd.value.trim(),
+      _k: 'u' + Date.now(),
+      _editing: false,
+      _new: true,
+    })
+    Message.success('已把 UC 链接加入「网盘推广链接」')
+  } else if (url) {
+    Message.info('该链接已在列表中')
+  }
+  if (g.images && g.images.length && !f.description) {
+    f.description = '截图：' + g.images.join('、')
+  }
+}
+
 function addLink() {
   appForm.value.links.push({
     pan_type: 'uc', label: 'UC网盘', url: '', password: '',
@@ -486,6 +587,19 @@ onMounted(loadAll)
 
 <!-- 说明: .page-toolbar / .thumb 的通用样式定义在 styles/global.css, 此处不再重复, 以继承其手机端规则 -->
 <style scoped>
+.uc-box {
+  border: 1px dashed var(--color-border-2);
+  border-radius: 10px;
+  padding: 12px;
+  margin-bottom: 14px;
+  background: var(--color-fill-1);
+}
+.uc-head { display: flex; align-items: center; gap: 6px; font-size: 13px; margin-bottom: 8px; flex-wrap: wrap; color: var(--color-text-1); }
+.uc-sub { color: var(--color-text-3); font-size: 12px; }
+.uc-err { color: rgb(var(--red-6)); font-size: 12px; margin-top: 8px; }
+.uc-result { margin-top: 10px; }
+.uc-suggest { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; font-size: 13px; margin-bottom: 8px; color: var(--color-text-1); }
+
 /* 桌面端把操作按钮推到右侧; 手机端隐藏(按钮换行平分) */
 .toolbar-spacer { flex: 1 1 auto; min-width: 0; }
 
