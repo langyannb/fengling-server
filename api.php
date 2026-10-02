@@ -3,7 +3,23 @@
 // 所有接口统一走这里: /api.php?action=xxx
 // 抑制 PHP 8.x deprecated 警告 (imagedestroy/curl_close 等无效果但会污染 JSON 响应)
 error_reporting(E_ALL & ~E_DEPRECATED & ~E_NOTICE & ~E_WARNING);
+// GD 解码大图按 宽*高*4 字节占内存, 默认 128M 上传大图会 OOM 致命错误 -> 前端拿到 HTML 报「响应解析失败」
+@ini_set('memory_limit', '512M');
+// 把 PHP 致命错误也转成 JSON, 前端永远拿到 {code,msg} 而不是错误页
+register_shutdown_function(function () {
+    $e = error_get_last();
+    if (!$e || !in_array($e['type'], [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR], true)) return;
+    if (headers_sent()) return;
+    http_response_code(500);
+    header('Content-Type: application/json; charset=utf-8');
+    echo json_encode([
+        'code' => -1,
+        'msg'  => '服务器错误: ' . $e['message'] . ' @ ' . basename($e['file']) . ':' . $e['line'],
+    ], JSON_UNESCAPED_UNICODE);
+});
 require_once __DIR__ . '/config.php';
+require_once __DIR__ . '/uc.php';
+require_once __DIR__ . '/apk.php';
 
 header('Access-Control-Allow-Origin: *');
 header('Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS');
@@ -128,6 +144,9 @@ function s3_key(string $dir, string $ext): string {
 
 /** 图片压缩 (GD): 压到 maxWidth 宽内 + JPEG 质量 80, 返回压缩后字节 */
 function compress_image(string $data, string $ext, int $maxWidth = 1600, int $quality = 80): string {
+    // 保护: 先读图片头部尺寸, 超过 6000 万像素不解码 (原样上传), 避免 GD 吃掉几百 MB 内存
+    $info = @getimagesizefromstring($data);
+    if ($info && !empty($info[0]) && !empty($info[1]) && ($info[0] * $info[1]) > 60000000) return $data;
     $img = @imagecreatefromstring($data);
     if (!$img) return $data; // 无法解析, 原样返回
     $w = imagesx($img);
@@ -150,6 +169,7 @@ function compress_image(string $data, string $ext, int $maxWidth = 1600, int $qu
         imagepng($img, null, 7);
     }
     $out = ob_get_clean();
+    @imagedestroy($img);
     return $out ?: $data;
 }
 
@@ -425,6 +445,7 @@ try {
         // ============ 图片上传 (管理) ============
         case 'upload':
             require_admin();
+            @set_time_limit(300);
             if (empty($_FILES['file'])) json_error('未收到文件');
             $file = $_FILES['file'];
             $ext = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
@@ -862,6 +883,152 @@ try {
             db()->prepare("UPDATE harm_reports SET status = ? WHERE id = ?")
                 ->execute([(int)param('status', 0) === 1 ? 1 : 0, (int)param('id', 0)]);
             json_out(null);
+
+        // ============ UC 网盘: 扫码登录 + 分享解析 ============
+        case 'uc_status':
+            require_admin();
+            json_out(UcDrive::status());
+
+        case 'uc_qr_create':
+            require_admin();
+            $uc = UcDrive::qrCreate();
+            if ((int)$uc['code'] !== 0) json_error($uc['msg'], 502);
+            json_out($uc['data']);
+
+        case 'uc_qr_poll':
+            require_admin();
+            $uc = UcDrive::qrPoll(param('token', ''));
+            if ((int)$uc['code'] !== 0) json_error($uc['msg'], (int)$uc['code'] === 400 ? 400 : 502);
+            json_out($uc['data']);
+
+        case 'uc_cookie_set':
+            require_admin();
+            $uc = UcDrive::loginByCookie(param('cookie', ''));
+            if ((int)$uc['code'] !== 0) json_error($uc['msg'], 400);
+            json_out($uc['data']);
+
+        case 'uc_logout':
+            require_admin();
+            UcDrive::clearAuth();
+            json_out(null);
+
+        case 'uc_resolve':
+            require_admin();
+            $uc = UcDrive::resolve(param('url', ''), param('pwd', ''));
+            if ((int)$uc['code'] !== 0) {
+                json_error($uc['msg'], (int)$uc['code'] === 401 ? 401 : ((int)$uc['code'] === 400 || !empty($uc['need_pwd']) ? 400 : 502));
+            }
+            $d = $uc['data'];
+            $rank = ['apk' => 5, 'zip' => 4, 'rar' => 4, '7z' => 4, 'xapk' => 3, 'apks' => 3];
+            $main = null;
+            foreach ($d['files'] as $f) {
+                if (!empty($f['isdir'])) continue;
+                $w = isset($rank[$f['ext']]) ? $rank[$f['ext']] : 1;
+                if ($main === null || $w > $main['_w'] || ($w === $main['_w'] && $f['size'] > $main['size'])) {
+                    $f['_w'] = $w;
+                    $main = $f;
+                }
+            }
+            $guess = ['name' => '', 'version' => ''];
+            if ($main) $guess = UcDrive::guessNameVersion($main['name']);
+            $d['suggest'] = [
+                'file'     => $main ? $main['name'] : '',
+                'name'     => $guess['name'],
+                'version'  => $guess['version'],
+                'size_mb'  => $main ? $main['size_mb'] : 0,
+                'kind'     => $main ? $main['ext'] : '',
+                'has_apk'  => false,
+                'images'   => [],
+                'packages' => [],
+            ];
+            foreach ($d['files'] as $f) {
+                if (!empty($f['isdir'])) continue;
+                if ($f['ext'] === 'apk') $d['suggest']['has_apk'] = true;
+                if (in_array($f['ext'], ['jpg', 'jpeg', 'png', 'webp'])) $d['suggest']['images'][] = $f['name'];
+                if (in_array($f['ext'], ['apk', 'zip', 'rar', '7z', 'xapk', 'apks'])) $d['suggest']['packages'][] = $f['name'];
+            }
+            json_out($d);
+
+        case 'uc_import':
+            require_admin();
+            @set_time_limit(600);
+            $auth = UcDrive::loadAuth();
+            if (empty($auth['cookie'])) json_error('UC 账号未登录，请先扫码登录', 401);
+            $want = param('kind', 'all');
+            $raw  = UcDrive::resolve(param('url', ''), param('pwd', ''));
+            if ((int)$raw['code'] !== 0) json_error($raw['msg'], (int)$raw['code'] === 401 ? 401 : 502);
+            $key    = $raw['data']['share_key'];
+            $stoken = isset($raw['data']['stoken']) ? $raw['data']['stoken'] : '';
+            $cookie = $auth['cookie'];
+            $files  = $raw['data']['files'];
+            $result = array('images' => array(), 'apk' => null, 'errors' => array());
+
+            if ($want === 'images' || $want === 'all') {
+                foreach ($files as $f) {
+                    if (!empty($f['isdir'])) continue;
+                    if (!in_array($f['ext'], array('jpg', 'jpeg', 'png', 'webp', 'gif'), true)) continue;
+                    if (count($result['images']) >= 15) break;
+                    $tmp = UcDrive::downloadToTmp($key, $stoken, $f['fid'], $f['fid_token'], $cookie);
+                    if ($tmp === '') { $result['errors'][] = '下载失败: ' . $f['name']; continue; }
+                    $data = @file_get_contents($tmp);
+                    @unlink($tmp);
+                    if ($data === false || $data === '') { $result['errors'][] = '读取失败: ' . $f['name']; continue; }
+                    $ext = $f['ext'] === 'jpeg' ? 'jpg' : $f['ext'];
+                    $data = compress_image($data, $ext, 1600, 82);
+                    $objKey = s3_key('screenshots', $ext);
+                    $mime = ($ext === 'jpg') ? 'image/jpeg' : 'image/' . $ext;
+                    if (s3_upload_bytes($data, $objKey, $mime)) {
+                        $result['images'][] = S3_PUBLIC_URL . '/' . $objKey;
+                    } else {
+                        $result['errors'][] = '上传失败: ' . $f['name'];
+                    }
+                }
+            }
+
+            if ($want === 'apk' || $want === 'all') {
+                $apk = null;
+                foreach ($files as $f) {
+                    if (!empty($f['isdir']) || $f['ext'] !== 'apk') continue;
+                    if ($apk === null || $f['size'] > $apk['size']) $apk = $f;
+                }
+                if ($apk === null) {
+                    $result['errors'][] = '分享里没有 apk 文件';
+                } else {
+                    $tmp = UcDrive::downloadToTmp($key, $stoken, $apk['fid'], $apk['fid_token'], $cookie);
+                    if ($tmp === '') {
+                        $result['errors'][] = '安装包下载失败（可能超过服务器限制）';
+                    } else {
+                        $p = ApkParser::parse($tmp);
+                        @unlink($tmp);
+                        $iconUrl = '';
+                        if (!empty($p['icon_data'])) {
+                            $ext = in_array($p['icon_ext'], array('png', 'webp', 'jpg'), true) ? $p['icon_ext'] : 'png';
+                            // 有些包里的图标是 4096x4096 的原图 (近 1MB), 压到 512px 以内再上传
+                            $iconRaw = compress_image($p['icon_data'], $ext, 512, 90);
+                            $objKey = s3_key('icons', $ext);
+                            $mime = ($ext === 'jpg') ? 'image/jpeg' : 'image/' . $ext;
+                            if (s3_upload_bytes($iconRaw, $objKey, $mime)) {
+                                $iconUrl = S3_PUBLIC_URL . '/' . $objKey;
+                            } else {
+                                $result['errors'][] = '图标上传失败, 请手动上传图标';
+                            }
+                        } else {
+                            // 提取不到时明确提示, 不再静默留空 (用户 2026-10-02 反馈过「图标没填上」)
+                            $result['errors'][] = '未能从安装包中提取到图标 (资源可能被混淆), 请手动上传';
+                        }
+                        $result['apk'] = array(
+                            'file'         => $apk['name'],
+                            'size_mb'      => $apk['size_mb'],
+                            'package'      => $p['package'],
+                            'version_name' => $p['version_name'],
+                            'version_code' => $p['version_code'],
+                            'icon_url'     => $iconUrl,
+                        );
+                        if (!empty($p['error'])) $result['errors'][] = $p['error'];
+                    }
+                }
+            }
+            json_out($result);
 
         default:
             json_error('未知操作: ' . $action, 404);

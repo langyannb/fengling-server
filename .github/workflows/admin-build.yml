@@ -1,0 +1,45 @@
+name: 管理后台构建
+
+on:
+  push:
+    paths:
+      - 'admin/**'
+      - '.github/workflows/admin-build.yml'
+  pull_request:
+    paths:
+      - 'admin/**'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 安装依赖
+        working-directory: admin
+        run: npm install --no-audit --no-fund
+
+      - name: 构建
+        working-directory: admin
+        run: npm run build
+
+      - name: 校验产物
+        run: |
+          echo "=== dist 内容 ==="
+          ls -la admin/dist
+          test -f admin/dist/index.html || { echo "缺少 index.html"; exit 1; }
+          test -d admin/dist/assets || { echo "缺少 assets 目录"; exit 1; }
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: fengling-admin-${{ github.run_number }}-${{ github.sha }}
+          path: admin/dist
+          retention-days: 30

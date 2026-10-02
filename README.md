@@ -7,18 +7,20 @@ Web 端仅为管理后台，用于维护软件/分类/网盘推广链接和查�
 
 ## 在线地址
 - 管理后台: http://REDACTED_SERVER_HOST:9845/
-- 默认管理员: zjyzjy / REDACTED_DB_PASS
+- 默认管理员: zjyzjy / (密码见部署备忘, 不写进仓库)
 
 ## 技术栈
 - 后端: PHP 8 + MySQL (PDO)
-- 前端: Vue 3 (CDN) + 原生 CSS, 手机端适配
+- 管理后台: Vue 3 + Vite + Arco Design Vue (源码在 `admin/`, 构建走 GitHub Actions)
+- 旧版后台: `admin.html` (单文件, 保留作回退)
 - Web 服务器: Nginx + PHP-FPM
 
 ## 文件结构
 ```
 ├── api.php        # API 入口 (所有接口, action 参数路由)
 ├── config.php     # 数据库配置
-├── admin.html     # 管理后台 (登录 + 软件/分类/链接管理 + 统计)
+├── admin/         # 管理后台源码 (Vue 3 + Arco Design Vue, Vite 构建)
+├── admin.html     # 旧版单文件后台 (回退用)
 └── schema.sql     # 数据库表结构 + 默认管理员
 ```
 
