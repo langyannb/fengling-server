@@ -432,9 +432,30 @@ class UcDrive
         return '';
     }
 
+    /** 刷新 __puus（OSS 直链回调校验必须带 __puus, 否则 403 RequestDeniedByCallback） */
+    public static function refreshPuus(string $cookie): string
+    {
+        $r = self::req(self::API . '/auth/pc/flush?pr=UCBrowser&fr=pc&entry=ft', array(
+            'method'  => 'GET',
+            'cookie'  => $cookie,
+            'headers' => self::apiHeaders($cookie),
+        ));
+        if (empty($r['setcookie'])) return $cookie;
+        $puus = '';
+        foreach ($r['setcookie'] as $one) {
+            if (preg_match('/__puus=([^;]+)/', $one, $m)) { $puus = $m[1]; break; }
+        }
+        if ($puus === '') return $cookie;
+        if (preg_match('/__puus=/', $cookie)) {
+            return preg_replace('/__puus=[^;]+/', '__puus=' . $puus, $cookie);
+        }
+        return $cookie . '; __puus=' . $puus;
+    }
+
     /** 从分享里流式下载文件到临时文件（大文件不占内存），返回路径（失败返回空串） */
     public static function downloadToTmp(string $key, string $stoken, string $fid, string $fidToken, string $cookie): string
     {
+        $cookie = self::refreshPuus($cookie);
         $dl = self::downloadUrl($key, $stoken, $fid, $fidToken, $cookie);
         if ($dl === '') return '';
         $tmp = tempnam(sys_get_temp_dir(), 'ucf_');
@@ -450,7 +471,7 @@ class UcDrive
             CURLOPT_CONNECTTIMEOUT => 15,
             CURLOPT_SSL_VERIFYPEER => false,
             CURLOPT_SSL_VERIFYHOST => 0,
-            CURLOPT_HTTPHEADER     => array('user-agent: ' . self::UA, 'referer: https://drive.uc.cn/'),
+            CURLOPT_HTTPHEADER     => array('user-agent: ' . self::UA, 'referer: https://drive.uc.cn/', 'cookie: ' . $cookie),
         ));
         $ok   = curl_exec($ch);
         $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
