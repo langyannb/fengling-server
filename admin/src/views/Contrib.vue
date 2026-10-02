@@ -39,8 +39,56 @@
         </a-button>
       </template>
       <div class="tip">投稿人投稿的应用: 在「软件」里编辑软件时填写「投稿人 QQ」即可关联, 此处会自动显示 ta 投稿了哪些软件。</div>
+
+      <!-- ===== 手机端: 卡片列表 (桌面端渲染路径完全不变) ===== -->
+      <div v-if="isMobile">
+        <a-spin :loading="loading" style="width: 100%">
+          <div class="m-cards">
+            <div v-for="record in contributors" :key="record.id" class="m-card">
+              <div class="m-card-head">
+                <img class="m-card-thumb" :src="qqAvatar(record.qq)" alt="" />
+                <div class="m-card-title">{{ record.name || record.qq }}</div>
+              </div>
+              <div class="m-card-row">
+                <span class="m-card-label">QQ</span>
+                <span class="m-card-value qq-cell">{{ record.qq }}</span>
+              </div>
+              <div class="m-card-row">
+                <span class="m-card-label">昵称</span>
+                <span class="m-card-value">{{ record.name || record.qq }}</span>
+              </div>
+              <div class="m-card-row">
+                <span class="m-card-label">投稿说明</span>
+                <span class="m-card-value">{{ record.bio || '暂无说明' }}</span>
+              </div>
+              <div class="m-card-row">
+                <span class="m-card-label">排序</span>
+                <span class="m-card-value">{{ record.sort_order }}</span>
+              </div>
+              <div class="m-card-row">
+                <span class="m-card-label">其投稿软件</span>
+                <span class="m-card-value">
+                  <template v-if="appNames(record).length">
+                    <a-tag v-for="n in appNames(record)" :key="n" color="arcoblue" size="small">{{ n }}</a-tag>
+                  </template>
+                  <span v-else class="muted">暂无投稿应用</span>
+                </span>
+              </div>
+              <div class="m-card-actions">
+                <a-button type="text" size="small" @click="editContributor(record)">编辑</a-button>
+                <a-popconfirm content="确认删除该投稿人?" @ok="delContributor(record)">
+                  <a-button type="text" status="danger" size="small">删除</a-button>
+                </a-popconfirm>
+              </div>
+            </div>
+          </div>
+        </a-spin>
+        <a-empty v-if="!loading && !contributors.length" />
+      </div>
+
+      <!-- ===== 桌面端: 原表格 (一字不改) ===== -->
       <!-- 横向总宽: 80+130+160+200+80+280+140 = 1070, 手机端由 tableScroll 兜底 >=720 -->
-      <a-table :data="contributors" :loading="loading" row-key="id" size="small" :scroll="scrollX">
+      <a-table v-else :data="contributors" :loading="loading" row-key="id" size="small" :scroll="scrollX">
         <template #columns>
           <a-table-column title="头像" :width="80">
             <template #cell="{ record }">
@@ -248,5 +296,9 @@ onMounted(load)
   .avatar { width: 40px; height: 40px; }
   /* 表头不换行, 避免列名折行把表格撑乱 */
   :deep(.arco-table-th) { white-space: nowrap; }
+  /* 卡片: 头像圆形 + 标签换行 */
+  .m-card-thumb { border-radius: 50%; }
+  .m-card-value .arco-tag { margin: 2px 0 2px 4px; }
+  .m-cards .qq-cell { text-align: right; }
 }
 </style>

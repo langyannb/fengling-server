@@ -30,7 +30,25 @@
           <template #icon><icon-refresh /></template>刷新
         </a-button>
       </template>
+      <div v-if="isMobile" class="m-cards">
+        <template v-if="topApps.length">
+          <div v-for="(record, i) in topApps" :key="record.id || i" class="m-card">
+            <div class="m-card-head">
+              <span class="rank" :class="i < 3 ? 'rank-' + (i + 1) : 'rank-n'">{{ i + 1 }}</span>
+              <img v-if="record.icon" :src="record.icon" class="m-card-thumb" />
+              <a-avatar v-else :size="36">{{ (record.name || '?')[0] }}</a-avatar>
+              <span class="m-card-title">{{ record.name || '-' }}</span>
+            </div>
+            <div class="m-card-foot">
+              <span class="m-card-sub">打开次数</span>
+              <span class="m-card-value"><b class="num">{{ record.cnt }}</b> 次</span>
+            </div>
+          </div>
+        </template>
+        <a-empty v-else />
+      </div>
       <a-table
+        v-else
         :data="topApps"
         :pagination="false"
         :scroll="{ x: 520 }"
@@ -61,7 +79,23 @@
     <a-row :gutter="[12, 12]">
       <a-col :xs="24" :md="12">
         <a-card class="page-card" :bordered="false" title="今日打开排行">
+          <div v-if="isMobile" class="m-cards">
+            <template v-if="topToday.length">
+              <div v-for="(record, i) in topToday" :key="record.id || i" class="m-card">
+                <div class="m-card-head">
+                  <span class="rank" :class="i < 3 ? 'rank-' + (i + 1) : 'rank-n'">{{ i + 1 }}</span>
+                  <span class="m-card-title">{{ record.name || '-' }}</span>
+                </div>
+                <div class="m-card-foot">
+                  <span class="m-card-sub">打开次数</span>
+                  <span class="m-card-value"><b class="num">{{ record.cnt }}</b> 次</span>
+                </div>
+              </div>
+            </template>
+            <a-empty v-else />
+          </div>
           <a-table
+            v-else
             :data="topToday"
             :pagination="false"
             :scroll="{ x: 380 }"
@@ -83,7 +117,23 @@
       </a-col>
       <a-col :xs="24" :md="12">
         <a-card class="page-card" :bordered="false" title="热门网盘链接">
+          <div v-if="isMobile" class="m-cards">
+            <template v-if="topLinks.length">
+              <div v-for="(record, i) in topLinks" :key="record.id || i" class="m-card">
+                <div class="m-card-head">
+                  <span class="rank" :class="i < 3 ? 'rank-' + (i + 1) : 'rank-n'">{{ i + 1 }}</span>
+                  <span class="m-card-title">{{ record.label || '-' }}</span>
+                </div>
+                <div class="m-card-foot">
+                  <span class="m-card-sub">点击数</span>
+                  <span class="m-card-value"><b class="num">{{ record.cnt }}</b> 次</span>
+                </div>
+              </div>
+            </template>
+            <a-empty v-else />
+          </div>
           <a-table
+            v-else
             :data="topLinks"
             :pagination="false"
             :scroll="{ x: 360 }"
@@ -108,6 +158,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { IconApps, IconDownload, IconThunderbolt, IconCalendar } from '@arco-design/web-vue/es/icon'
 import { api, pickList } from '../api'
+import { isMobile } from '../composables/useResponsive'
 
 const stats = ref({})
 const loading = ref(false)
@@ -167,6 +218,25 @@ onMounted(load)
 }
 .num { color: rgb(var(--primary-6)); font-size: 15px; }
 .card-title { font-size: 15px; font-weight: 600; }
+
+/* 手机端名次标记 */
+.rank {
+  flex: 0 0 auto;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 6px;
+  border-radius: 7px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+}
+.rank-1 { background: #F53F3F; color: #fff; }
+.rank-2 { background: #FF7D00; color: #fff; }
+.rank-3 { background: #165DFF; color: #fff; }
+.rank-n { background: var(--color-fill-2); color: var(--color-text-3); }
 
 @media (max-width: 820px) {
   .stat-icon { width: 34px; height: 34px; font-size: 17px; border-radius: 10px; }

@@ -76,3 +76,27 @@ body {
 @media (max-width: 380px) {
   .arco-modal { width: 96vw !important; max-width: 96vw; }
 }
+
+/* ==== 手机端卡片列表：替代必须横向滚动的表格 ==== */
+.m-cards { display: flex; flex-direction: column; gap: 10px; }
+.m-card {
+  background: var(--color-bg-2);
+  border: 1px solid var(--color-border-2);
+  border-radius: 12px;
+  padding: 12px;
+}
+.m-card-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.m-card-title { font-weight: 600; font-size: 15px; color: var(--color-text-1); flex: 1; min-width: 0; word-break: break-all; line-height: 1.4; }
+.m-card-sub { font-size: 12px; color: var(--color-text-3); }
+.m-card-row {
+  display: flex; justify-content: space-between; align-items: flex-start; gap: 10px;
+  padding: 6px 0; font-size: 13px; line-height: 1.5;
+  border-top: 1px dashed var(--color-border-1);
+}
+.m-card-row:first-of-type { border-top: none; }
+.m-card-label { color: var(--color-text-3); flex: 0 0 auto; }
+.m-card-value { color: var(--color-text-1); text-align: right; word-break: break-all; min-width: 0; }
+.m-card-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 6px; margin-top: 8px; padding-top: 10px; border-top: 1px solid var(--color-border-1); }
+.m-card-actions .arco-btn { min-height: 34px; }
+.m-card-thumb { width: 44px; height: 44px; border-radius: 10px; object-fit: cover; flex: 0 0 auto; background: var(--color-fill-2); }
+.m-card-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 8px; }

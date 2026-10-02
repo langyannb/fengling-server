@@ -12,8 +12,53 @@
       <span class="muted">共 {{ list.length }} 条</span>
     </div>
 
+    <!-- ============ 手机端: 卡片列表 (替代必须横滑的表格) ============ -->
+    <template v-if="isMobile">
+      <a-empty v-if="!list.length" description="暂无数据" />
+      <div v-else class="m-cards">
+        <div v-for="record in list" :key="record.id" class="m-card">
+          <div class="m-card-head">
+            <img v-if="record.image" class="m-card-thumb" :src="record.image" />
+            <div v-else class="m-card-thumb"></div>
+            <div class="m-card-title">{{ record.title || '未命名' }}</div>
+          </div>
+
+          <div class="m-card-row">
+            <span class="m-card-label">跳转</span>
+            <span class="m-card-value">
+              <a-link v-if="record.url" :href="record.url" target="_blank">{{ record.url }}</a-link>
+              <a-tag v-else-if="record.app_name" color="arcoblue">→ {{ record.app_name }}</a-tag>
+              <span v-else class="muted">无</span>
+            </span>
+          </div>
+
+          <div class="m-card-row">
+            <span class="m-card-label">排序</span>
+            <span class="m-card-value">{{ record.sort_order }}</span>
+          </div>
+
+          <div class="m-card-row">
+            <span class="m-card-label">状态</span>
+            <span class="m-card-value">
+              <a-tag :color="Number(record.is_active) ? 'green' : 'gray'">
+                {{ Number(record.is_active) ? '启用' : '停用' }}
+              </a-tag>
+            </span>
+          </div>
+
+          <div class="m-card-actions">
+            <a-button type="text" size="small" @click="openBanner(record)">编辑</a-button>
+            <a-popconfirm content="删除该轮播?" @ok="delBanner(record)">
+              <a-button type="text" size="small" status="danger">删除</a-button>
+            </a-popconfirm>
+          </div>
+        </div>
+      </div>
+    </template>
+
+    <!-- ============ 桌面端: 原表格, 渲染路径保持不变 ============ -->
     <!-- 横向总宽: 130+200+260+90+100+160 = 940, 取 940, 手机端由 tableScroll 兜底 >=720 -->
-    <a-table :data="list" :loading="loading" row-key="id" size="small" :scroll="scrollX">
+    <a-table v-else :data="list" :loading="loading" row-key="id" size="small" :scroll="scrollX">
       <template #columns>
         <a-table-column title="图片" :width="130">
           <template #cell="{ record }">
@@ -311,6 +356,13 @@ onMounted(() => {
   background: var(--color-mask-bg, rgba(0, 0, 0, 0.45));
   color: var(--color-white, #fff);
   font-size: 13px;
+}
+
+/* 手机端卡片: 轮播图是横图, 缩略图加宽以保留 16:9 观感 */
+.m-card .m-card-thumb {
+  width: 84px;
+  height: 48px;
+  border-radius: 8px;
 }
 
 /* ============ 手机 (<=820px) ============ */

@@ -33,13 +33,85 @@
         </a-button>
       </div>
 
+      <!-- ===== 手机端: 卡片列表 (桌面端渲染路径完全不变) ===== -->
+      <template v-if="isMobile">
+        <a-spin :loading="loading" style="width: 100%">
+          <div class="m-cards">
+            <div v-for="record in pageList" :key="record.id" class="m-card">
+              <div class="m-card-head">
+                <img v-if="record.icon" :src="record.icon" class="m-card-thumb" />
+                <div v-else class="m-card-thumb m-card-thumb-text">{{ (record.name || '?')[0] }}</div>
+                <div class="m-card-title">
+                  {{ record.name }}
+                  <a-tag v-if="record.is_new" size="small" color="arcoblue">新</a-tag>
+                  <a-tag v-if="record.is_pack" size="small" color="purple">整合</a-tag>
+                  <a-tag v-if="!Number(record.is_active)" size="small" color="red">下架</a-tag>
+                </div>
+              </div>
+              <div class="m-card-row">
+                <span class="m-card-label">分类</span>
+                <span class="m-card-value">{{ record.category_name || '未分类' }}</span>
+              </div>
+              <div class="m-card-row">
+                <span class="m-card-label">版本</span>
+                <span class="m-card-value">{{ record.version || '-' }}</span>
+              </div>
+              <div class="m-card-row">
+                <span class="m-card-label">包名</span>
+                <span class="m-card-value">{{ record.package_name || '-' }}</span>
+              </div>
+              <div class="m-card-row">
+                <span class="m-card-label">投稿QQ</span>
+                <span class="m-card-value">{{ record.contributor_qq || '-' }}</span>
+              </div>
+              <div class="m-card-row">
+                <span class="m-card-label">标记</span>
+                <span class="m-card-value">
+                  <a-tag v-if="Number(record.is_top)" size="small" color="orange">置顶</a-tag>
+                  <a-tag v-if="Number(record.is_featured)" size="small" color="gold">精选</a-tag>
+                  <span v-if="!Number(record.is_top) && !Number(record.is_featured)" class="text-muted">-</span>
+                </span>
+              </div>
+              <div class="m-card-row">
+                <span class="m-card-label">下载</span>
+                <span class="m-card-value">{{ record.download_count }}</span>
+              </div>
+              <div class="m-card-row">
+                <span class="m-card-label">发布日期</span>
+                <span class="m-card-value">{{ record.release_date || '-' }}</span>
+              </div>
+              <div class="m-card-row">
+                <span class="m-card-label">排序</span>
+                <span class="m-card-value">{{ record.sort_order }}</span>
+              </div>
+              <div class="m-card-actions">
+                <a-button type="text" size="small" @click="openApp(record)">编辑</a-button>
+                <a-popconfirm content="确认删除该软件?" @ok="delApp(record)">
+                  <a-button type="text" status="danger" size="small">删除</a-button>
+                </a-popconfirm>
+              </div>
+            </div>
+          </div>
+        </a-spin>
+        <a-empty v-if="!loading && !filteredList.length" description="暂无数据" />
+        <a-pagination
+          v-if="filteredList.length"
+          v-model:current="pagination.current"
+          v-model:page-size="pagination.pageSize"
+          :total="filteredList.length"
+          :show-total="true"
+          :show-page-size="true"
+          class="m-pager"
+        />
+      </template>
+      <template v-else>
       <a-table
         :data="filteredList"
         row-key="id"
         size="small"
         :loading="loading"
         :scroll="scrollX"
-        :pagination="{ pageSize: 20, showTotal: true, showPageSize: true }"
+        :pagination="pagination"
       >
         <template #columns>
           <a-table-column title="图标" :width="72">
@@ -83,6 +155,7 @@
         </template>
         <template #empty>暂无数据</template>
       </a-table>
+      </template>
     </a-card>
 
     <a-modal
@@ -365,6 +438,19 @@ const filteredList = computed(() => {
     if (!k) return true
     return [a.name, a.package_name, a.contributor_qq].some(v => String(v || '').toLowerCase().includes(k))
   })
+})
+
+// 分页: 桌面端表格与手机端卡片共用同一变量 (与 Crash.vue 一致)
+const pagination = ref({ pageSize: 20, showTotal: true, showPageSize: true })
+
+// 手机端卡片: 手动分页切片 (与桌面端共用同一 pagination)
+const pageList = computed(() => {
+  const size = Number(pagination.value.pageSize) || 20
+  const total = filteredList.value.length
+  const pages = Math.max(1, Math.ceil(total / size))
+  const cur = Math.min(Math.max(1, Number(pagination.value.current) || 1), pages)
+  const start = (cur - 1) * size
+  return filteredList.value.slice(start, start + size)
 })
 
 async function loadApps() {
@@ -695,4 +781,8 @@ onMounted(loadAll)
   .link-item .arco-btn { flex: 1 1 auto; }
   .link-editor { padding: 10px; }
 }
+
+/* 手机端卡片补充: 文字缩略图居中 + 分页右对齐 (其余 .m-card-* 已在 global.css) */
+.m-card-thumb-text { display: flex; align-items: center; justify-content: center; color: var(--color-text-3); font-size: 16px; font-weight: 600; }
+.m-pager { justify-content: flex-end; margin-top: 12px; }
 </style>

@@ -12,8 +12,55 @@
       <span class="muted">共 {{ list.length }} 个分类 (顶级 {{ topCats.length }} 个)</span>
     </div>
 
+    <!-- ============ 手机端: 卡片列表 (替代必须横滑的表格) ============ -->
+    <template v-if="isMobile">
+      <a-empty v-if="!sortedCats.length" description="暂无分类" />
+      <div v-else class="m-cards">
+        <div v-for="record in sortedCats" :key="record.id" class="m-card">
+          <div class="m-card-head">
+            <img v-if="record.icon" class="m-card-thumb" :src="record.icon" />
+            <a-avatar v-else :size="44" :style="{ backgroundColor: record.color || '#4C6FFF' }">
+              {{ (record.name || '?')[0] }}
+            </a-avatar>
+            <div class="m-card-title">
+              <span v-if="record.parent_id" class="muted">子分类 · </span>{{ record.name }}
+            </div>
+          </div>
+
+          <div class="m-card-row">
+            <span class="m-card-label">父分类</span>
+            <span class="m-card-value">
+              <a-tag v-if="record.parent_id" color="arcoblue">{{ catName(record.parent_id) || '未知' }}</a-tag>
+              <a-tag v-else color="gray">顶级分类</a-tag>
+            </span>
+          </div>
+
+          <div class="m-card-row">
+            <span class="m-card-label">颜色</span>
+            <span class="m-card-value">
+              <span class="dot" :style="{ background: record.color || '#4C6FFF' }"></span>
+              <span class="muted">{{ record.color || '默认' }}</span>
+            </span>
+          </div>
+
+          <div class="m-card-row">
+            <span class="m-card-label">排序</span>
+            <span class="m-card-value">{{ record.sort_order }}</span>
+          </div>
+
+          <div class="m-card-actions">
+            <a-button type="text" size="small" @click="openCat(record)">编辑</a-button>
+            <a-popconfirm content="确认删除该分类?" @ok="delCat(record)">
+              <a-button type="text" size="small" status="danger">删除</a-button>
+            </a-popconfirm>
+          </div>
+        </div>
+      </div>
+    </template>
+
+    <!-- ============ 桌面端: 原表格, 渲染路径保持不变 ============ -->
     <!-- 横向总宽: 70+180+140+140+90+160 = 780, 取 820 留余量, 手机端由 tableScroll 兜底 >=720 -->
-    <a-table :data="sortedCats" :loading="loading" row-key="id" size="small" :scroll="scrollX">
+    <a-table v-else :data="sortedCats" :loading="loading" row-key="id" size="small" :scroll="scrollX">
       <template #columns>
         <a-table-column title="图标" :width="70">
           <template #cell="{ record }">
@@ -132,7 +179,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import { api, uploadFile, pickList } from '../api'
-import { modalWidth, tableScroll } from '../composables/useResponsive'
+import { isMobile, modalWidth, tableScroll } from '../composables/useResponsive'
 
 // 表格横向滚动: 桌面按列宽总和, 手机端至少 720
 const scrollX = tableScroll(820)
@@ -346,6 +393,12 @@ onMounted(load)
 }
 .color-swatch--on {
   outline: 2px solid var(--color-text-2);
+}
+
+/* 手机端卡片: 图标缩略图用 contain, 避免非正方形图标被裁 */
+.m-card .m-card-thumb {
+  object-fit: contain;
+  background: var(--color-fill-2);
 }
 
 /* ============ 手机 (<=820px) ============ */
