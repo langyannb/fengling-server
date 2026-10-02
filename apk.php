@@ -107,7 +107,8 @@ class ApkParser
                 $blen = self::u8var($d, $o);
                 $out[$i] = substr($d, $o, $blen);
             } else {
-                $clen = self::u8var($d, $o);
+                // UTF-16 池: 长度前缀是 u16 变体(2 或 4 字节), 每字符 2 字节
+                $clen = self::u16var($d, $o);
                 $raw  = substr($d, $o, $clen * 2);
                 $conv = @iconv('UTF-16LE', 'UTF-8//IGNORE', $raw);
                 $out[$i] = ($conv === false) ? '' : $conv;
@@ -128,6 +129,21 @@ class ApkParser
                 if ($o >= $len) return $v & 0x7fff;
                 $v = (($v & 0x7fff) << 8) | ord($d[$o++]);
             }
+        }
+        return $v;
+    }
+
+    /** UTF-16 字符串长度: u16 变体, 高位 0x8000 表示再读一个 u16 拼成 4 字节 */
+    private static function u16var(string $d, int &$o): int
+    {
+        $len = strlen($d);
+        if ($o + 2 > $len) return 0;
+        $v = self::u16($d, $o);
+        $o += 2;
+        if ($v & 0x8000) {
+            if ($o + 2 > $len) return $v & 0x7fff;
+            $v = (($v & 0x7fff) << 16) | self::u16($d, $o);
+            $o += 2;
         }
         return $v;
     }
