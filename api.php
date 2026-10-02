@@ -1003,9 +1003,18 @@ try {
                         $iconUrl = '';
                         if (!empty($p['icon_data'])) {
                             $ext = in_array($p['icon_ext'], array('png', 'webp', 'jpg'), true) ? $p['icon_ext'] : 'png';
+                            // 有些包里的图标是 4096x4096 的原图 (近 1MB), 压到 512px 以内再上传
+                            $iconRaw = compress_image($p['icon_data'], $ext, 512, 90);
                             $objKey = s3_key('icons', $ext);
                             $mime = ($ext === 'jpg') ? 'image/jpeg' : 'image/' . $ext;
-                            if (s3_upload_bytes($p['icon_data'], $objKey, $mime)) $iconUrl = S3_PUBLIC_URL . '/' . $objKey;
+                            if (s3_upload_bytes($iconRaw, $objKey, $mime)) {
+                                $iconUrl = S3_PUBLIC_URL . '/' . $objKey;
+                            } else {
+                                $result['errors'][] = '图标上传失败, 请手动上传图标';
+                            }
+                        } else {
+                            // 提取不到时明确提示, 不再静默留空 (用户 2026-10-02 反馈过「图标没填上」)
+                            $result['errors'][] = '未能从安装包中提取到图标 (资源可能被混淆), 请手动上传';
                         }
                         $result['apk'] = array(
                             'file'         => $apk['name'],

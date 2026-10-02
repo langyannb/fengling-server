@@ -33,7 +33,29 @@ class ApkParser
             $out['error'] = 'APK 内没有 AndroidManifest.xml';
         }
 
-        $icon = self::pickIcon($zip);
+        // 优先: 用 AndroidManifest 里 android:icon 的资源 ID 到 resources.arsc 反查真实文件路径。
+        // 很多 APK 会把 res/ 下的文件名混淆成 res/2V.png 这类两字符短名, 那时靠文件名猜必然抓不到图标。
+        $icon = null;
+        if (!empty($m['icon_res']) && is_file(__DIR__ . '/arsc.php')) {
+            $arscBin = $zip->getFromName('resources.arsc');
+            if ($arscBin !== false && $arscBin !== '') {
+                require_once __DIR__ . '/arsc.php';
+                if (class_exists('ArscParser')) {
+                    $iconPath = (new ArscParser($arscBin))->resolveFile((int)$m['icon_res']);
+                    if ($iconPath !== '') {
+                        $iconExt = strtolower(pathinfo($iconPath, PATHINFO_EXTENSION));
+                        // 自适应图标指向的是 xml, 这里只接受位图; xml 的情况交给下面的文件名兜底逻辑
+                        if (in_array($iconExt, array('png', 'webp', 'jpg', 'jpeg'), true)) {
+                            $iconData = $zip->getFromName($iconPath);
+                            if ($iconData !== false && $iconData !== '' && @getimagesizefromstring($iconData) !== false) {
+                                $icon = array('data' => $iconData, 'ext' => $iconExt, 'path' => $iconPath);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if ($icon === null) $icon = self::pickIcon($zip);
         if ($icon !== null) {
             $out['icon_data'] = $icon['data'];
             $out['icon_ext']  = $icon['ext'];
@@ -47,7 +69,7 @@ class ApkParser
 
     private static function parseManifest(string $d): array
     {
-        $out = array('package' => '', 'version_name' => '', 'version_code' => 0, 'label' => '');
+        $out = array('package' => '', 'version_name' => '', 'version_code' => 0, 'label' => '', 'icon_res' => 0);
         $len = strlen($d);
         if ($len < 16 || self::u32($d, 0) !== 0x00080003) return $out;
         $strs = array();
@@ -79,6 +101,11 @@ class ApkParser
                             if ($aname === 'versionCode') $out['version_code'] = (int)$data;
                         }
                         if ($name === 'application' && $aname === 'label') $out['label'] = $val;
+                        // android:icon 编译后是资源 ID 引用 (dataType 0x01), 供 arsc 反查真实文件路径
+                        if ($name === 'application' && $aname === 'icon') {
+                            $dtype = ord($d[$a + 15]);
+                            if ($dtype === 0x01 || $data > 0) $out['icon_res'] = (int)$data;
+                        }
                     }
                 }
             }
