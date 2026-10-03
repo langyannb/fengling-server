@@ -265,8 +265,10 @@ try {
             }
             db()->prepare('UPDATE email_codes SET used = 1 WHERE id = ?')->execute([$row['id']]);
             $emailVal = $email === '' ? null : $email;
-            db()->prepare("INSERT INTO users (username, password, nickname, email, email_verified, role, last_login_at) VALUES (?, ?, ?, ?, 1, 'user', NOW())")
-                ->execute([$username, password_hash($password, PASSWORD_DEFAULT), $nickname, $emailVal]);
+            // QQ 邮箱注册: 自动把 QQ 头像作为默认头像 (用户之后可在「我的 - 账号」里改)
+            $qqAvatar = qq_avatar_from_email($email);
+            db()->prepare("INSERT INTO users (username, password, nickname, email, email_verified, avatar, role, last_login_at) VALUES (?, ?, ?, ?, 1, ?, 'user', NOW())")
+                ->execute([$username, password_hash($password, PASSWORD_DEFAULT), $nickname, $emailVal, $qqAvatar]);
             $uid = (int)db()->lastInsertId();
             $token = make_token();
             // 注册即登录: token 必须落库, 否则返回的 token 是孤儿, 后续鉴权全部 401
@@ -428,7 +430,20 @@ try {
                     $fields[] = 'email_verified = ?';
                     $args[]   = 0;
                 }
+                // 邮箱改成 QQ 邮箱且该用户还没有头像: 自动补一个 QQ 头像
+                $avatarNow = trim((string)($old['avatar'] ?? ''));
+                if ($avatarNow === '') {
+                    $qqAvatar = qq_avatar_from_email($email);
+                    if ($qqAvatar !== '') {
+                        $fields[] = 'avatar = ?';
+                        $argsInsert = $qqAvatar;
+                    }
+                }
                 $args[] = $id;
+                if (isset($argsInsert)) {
+                    // avatar 要排在 id 之前
+                    array_splice($args, count($args) - 1, 0, [$argsInsert]);
+                }
                 db()->prepare('UPDATE users SET ' . implode(', ', $fields) . ' WHERE id = ?')->execute($args);
                 // 由封禁改为启用时推一条通知
                 if ($active === 1 && (int)$old['is_active'] === 0) {
@@ -437,8 +452,10 @@ try {
             } else {
                 if (strlen($password) < 6) json_error('密码至少 6 位');
                 $emailVal = $email === '' ? null : $email;
-                db()->prepare('INSERT INTO users (username, password, nickname, email, email_verified, role, is_active, bio) VALUES (?, ?, ?, ?, 0, ?, ?, ?)')
-                    ->execute([$username, password_hash($password, PASSWORD_DEFAULT), $nickname, $emailVal, $role, $active, $bio]);
+                // 后台新建用户时填了 QQ 邮箱: 自动给一个 QQ 头像
+                $qqAvatarNew = qq_avatar_from_email($email);
+                db()->prepare('INSERT INTO users (username, password, nickname, email, email_verified, avatar, role, is_active, bio) VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?)')
+                    ->execute([$username, password_hash($password, PASSWORD_DEFAULT), $nickname, $emailVal, $qqAvatarNew, $role, $active, $bio]);
                 $id = (int)db()->lastInsertId();
             }
             $st = db()->prepare('SELECT * FROM users WHERE id = ?');
@@ -518,6 +535,12 @@ try {
             $st->execute([$email, $me['id']]);
             if ($st->fetch()) json_error('该邮箱已被其他账号使用');
             db()->prepare('UPDATE users SET email = ?, email_verified = 1 WHERE id = ?')->execute([$email, $me['id']]);
+            // 验证的是 QQ 邮箱且用户还没设置过头像: 自动补上 QQ 头像
+            $qqAvatar = qq_avatar_from_email($email);
+            if ($qqAvatar !== '') {
+                db()->prepare("UPDATE users SET avatar = ? WHERE id = ? AND (avatar IS NULL OR avatar = '')")
+                    ->execute([$qqAvatar, $me['id']]);
+            }
             notify_push((int)$me['id'], '邮箱验证成功', '你的邮箱 ' . $email . ' 已验证成功, 可用于找回密码。', 'system');
             $st = db()->prepare('SELECT * FROM users WHERE id = ?');
             $st->execute([$me['id']]);
@@ -2013,6 +2036,20 @@ function user_public(array $u): array
     ];
 }
 
+
+/**
+ * 从 QQ 邮箱推导 QQ 头像地址 (腾讯公开的 qlogo 接口)。
+ * 例: 12345678@qq.com -> https://q1.qlogo.cn/g?b=qq&nk=12345678&s=640
+ * 非 QQ 邮箱返回空串 (不做兜底, 让前端显示昵称首字)。
+ */
+function qq_avatar_from_email(string $email): string
+{
+    $email = trim($email);
+    if (preg_match('/^(\d{5,12})@(qq\.com|vip\.qq\.com)$/i', $email, $m)) {
+        return 'https://q1.qlogo.cn/g?b=qq&nk=' . $m[1] . '&s=640';
+    }
+    return '';
+}
 
 // ==================== 社交系统辅助函数 ====================
 
