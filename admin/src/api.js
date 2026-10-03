@@ -59,6 +59,37 @@ export async function api(action, params = {}, method = 'GET') {
   return body
 }
 
+/**
+ * 统一请求 (FormData 版): 用于「一次请求里既有普通字段又有图片文件」的接口,
+ * 例如 admin_group_save 带上 icon_file 直接上传群头像。
+ * fields 里 File / Blob 直接 append, 其余转成字符串。
+ */
+export async function apiForm(action, fields = {}) {
+  const fd = new FormData()
+  Object.entries(fields).forEach(([k, v]) => {
+    if (v === undefined || v === null) return
+    fd.append(k, v)
+  })
+  let res
+  try {
+    res = await fetch(`${API_BASE}?action=${encodeURIComponent(action)}`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + auth.token },
+      body: fd,
+    })
+  } catch (e) {
+    Message.error('网络错误: ' + e.message)
+    return { code: -1, msg: '网络错误' }
+  }
+  let body
+  try { body = await res.json() } catch {
+    const snippet = (await res.text().catch(() => '')).replace(/\s+/g, ' ').slice(0, 140)
+    body = { code: -1, msg: `响应解析失败 (HTTP ${res.status})` + (snippet ? ': ' + snippet : '') }
+  }
+  if (res.status === 401 || body.code === 401) { onUnauthorized(); return { code: 401, msg: '未登录' } }
+  return body
+}
+
 /** 文件上传 (FormData): action = 'upload'(图片) | 'upload_apk'(安装包) */
 export async function uploadFile(action, file, onProgress) {
   return new Promise((resolve) => {
@@ -85,5 +116,10 @@ export async function uploadFile(action, file, onProgress) {
 /** 表格分页/搜索通用的小工具 */
 export function pickList(res) {
   if (!res || res.code !== 0) { if (res && res.code !== 401) Message.error(res?.msg || '加载失败'); return [] }
-  return res.data || []
+  const d = res.data
+  if (Array.isArray(d)) return d
+  // 分页类接口返回 { list, total, page, page_size }, 也要兼容,
+  // 否则 v-for 会去遍历对象的 key —— 表现为「只有一个未命名的 XXX」
+  if (d && Array.isArray(d.list)) return d.list
+  return []
 }

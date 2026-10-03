@@ -25,6 +25,14 @@
       <a-menu-item key="notice">公告设置</a-menu-item>
     </a-sub-menu>
 
+    <a-sub-menu key="g-social">
+      <template #icon><icon-message /></template>
+      <template #title>社交</template>
+      <a-menu-item key="groups">群组管理</a-menu-item>
+      <a-menu-item key="social">群消息</a-menu-item>
+      <a-menu-item key="notify">通知下发</a-menu-item>
+    </a-sub-menu>
+
     <a-sub-menu key="g-settings">
       <template #icon><icon-settings /></template>
       <template #title>运营</template>
@@ -33,6 +41,7 @@
       <a-menu-item key="harm">和谐反馈</a-menu-item>
       <a-menu-item key="about">关于/联系方式</a-menu-item>
       <a-menu-item key="uc">UC 网盘</a-menu-item>
+      <a-menu-item key="users">用户管理</a-menu-item>
     </a-sub-menu>
   </a-menu>
 </template>
@@ -42,7 +51,7 @@ defineProps({
   selected: { type: Array, default: () => [] },
 })
 const emit = defineEmits(['select'])
-const openKeys = ['g-apps', 'g-publish', 'g-settings']
+const openKeys = ['g-apps', 'g-publish', 'g-social', 'g-settings']
 function onClick(key) {
   emit('select', key)
 }
