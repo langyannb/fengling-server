@@ -590,6 +590,32 @@ try {
                     $names[(int)$u2['id']] = $u2['nickname'] !== '' ? $u2['nickname'] : $u2['username'];
                 }
                 foreach ($rows as $i => $r) { $rows[$i]['at_names'] = $names; }
+                // 引用回复: 一次性把被引用的原消息查出来挂到每条消息上 (避免 N+1)
+                $qids = [];
+                foreach ($rows as $r) {
+                    $q = (int)($r['quote_id'] ?? 0);
+                    if ($q > 0) $qids[$q] = true;
+                }
+                if ($qids) {
+                    $qk = array_keys($qids);
+                    $in2 = implode(',', array_fill(0, count($qk), '?'));
+                    $st = db()->prepare('SELECT m.id, m.content, m.user_id, u.nickname
+                                         FROM social_messages m LEFT JOIN users u ON u.id = m.user_id
+                                         WHERE m.id IN (' . $in2 . ')');
+                    $st->execute($qk);
+                    $qmap = [];
+                    foreach ($st->fetchAll() as $q) {
+                        $qn = (string)($q['nickname'] ?? '');
+                        $qmap[(int)$q['id']] = [$qn !== '' ? $qn : ('用户' . (int)$q['user_id']), (string)$q['content']];
+                    }
+                    foreach ($rows as $i => $r) {
+                        $q = (int)($r['quote_id'] ?? 0);
+                        if ($q > 0 && isset($qmap[$q])) {
+                            $rows[$i]['quote_nickname'] = $qmap[$q][0];
+                            $rows[$i]['quote_content'] = $qmap[$q][1];
+                        }
+                    }
+                }
             }
             json_out(['list' => array_map('social_msg_public', $rows), 'has_more' => count($rows) >= $limit]);
 
@@ -618,8 +644,15 @@ try {
             );
             // at_users 里用 0 作为 "所有人" 的标记位 (真实用户 id 都 > 0)
             $atStore = $atAll ? array_merge([0], $at) : $at;
-            db()->prepare('INSERT INTO social_messages (group_id, user_id, content, at_users, is_recalled) VALUES (?, ?, ?, ?, 0)')
-                ->execute([$gid, (int)$me['id'], $content, implode(',', $atStore)]);
+            // 引用回复: 只接受同群存在的消息, 否则忽略
+            $quoteId = (int)param('quote_id', 0);
+            if ($quoteId > 0) {
+                $st = db()->prepare('SELECT id FROM social_messages WHERE id = ? AND group_id = ?');
+                $st->execute([$quoteId, $gid]);
+                if (!$st->fetchColumn()) $quoteId = 0;
+            }
+            db()->prepare('INSERT INTO social_messages (group_id, user_id, content, at_users, quote_id, is_recalled) VALUES (?, ?, ?, ?, ?, 0)')
+                ->execute([$gid, (int)$me['id'], $content, implode(',', $atStore), $quoteId]);
             $mid = (int)db()->lastInsertId();
             if ($atAll) {
                 $st = db()->prepare('SELECT id FROM users WHERE is_active = 1 AND id <> ?');
@@ -654,7 +687,7 @@ try {
                     notify_merge($uid, '「' . $g['name'] . '」新消息', $senderName . ': ' . $brief, 'social', 'msg:' . $gid . ':' . $mid);
                 }
             }
-            json_out(['id' => $mid, 'at_all' => $atAll ? 1 : 0, 'created_at' => date('Y-m-d H:i:s')]);
+            json_out(['id' => $mid, 'at_all' => $atAll ? 1 : 0, 'quote_id' => $quoteId, 'created_at' => date('Y-m-d H:i:s')]);
 
         case 'social_recall':
             $me = current_user_or_401();
@@ -2048,6 +2081,9 @@ function social_msg_public(array $m): array
         'role'        => (string)($m['role'] ?? 'user'),
         'content'     => $recalled ? '' : (string)$m['content'],
         'at'          => $at,
+        'quote_id'      => (int)($m['quote_id'] ?? 0),
+        'quote_nickname' => $recalled ? '' : (string)($m['quote_nickname'] ?? ''),
+        'quote_content'  => $recalled ? '' : (string)($m['quote_content'] ?? ''),
         'is_recalled' => $recalled ? 1 : 0,
         'created_at'  => (string)$m['created_at'],
         'time_text'   => date('H:i', $ts ?: time()),
