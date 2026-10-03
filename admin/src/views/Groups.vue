@@ -156,6 +156,16 @@
           />
         </a-form-item>
 
+        <a-form-item field="notice" label="群公告 (最多 500 字, App 端聊天页顶部展示)">
+          <a-textarea
+            v-model="form.notice"
+            :max-length="500"
+            show-word-limit
+            :auto-size="{ minRows: 2, maxRows: 5 }"
+            placeholder="留空表示不显示公告"
+          />
+        </a-form-item>
+
         <!-- 手机端排序/状态各占整行, 桌面保持半宽 -->
         <a-row :gutter="16">
           <a-col :span="isMobile ? 24 : 12">
@@ -198,6 +208,7 @@ const form = reactive({
   name: '',
   icon: '',
   description: '',
+  notice: '',
   sort_order: 0,
   is_active: 1,
 })
@@ -224,6 +235,7 @@ function openGroup(record) {
       name: record.name || '',
       icon: record.icon || '',
       description: record.description || '',
+      notice: record.notice || '',
       sort_order: Number(record.sort_order) || 0,
       is_active: Number(record.is_active) ? 1 : 0,
     })
@@ -233,6 +245,7 @@ function openGroup(record) {
       name: '',
       icon: '',
       description: '',
+      notice: '',
       sort_order: 0,
       is_active: 1,
     })
@@ -256,6 +269,7 @@ async function save() {
       name: form.name.trim(),
       icon: form.icon || '',
       description: form.description || '',
+      notice: form.notice || '',
       sort_order: Number(form.sort_order) || 0,
       is_active: Number(form.is_active) ? 1 : 0,
     }, 'POST')
@@ -279,6 +293,7 @@ async function toggleActive(record) {
     name: record.name,
     icon: record.icon || '',
     description: record.description || '',
+    notice: record.notice || '',
     sort_order: Number(record.sort_order) || 0,
     is_active: next,
   }, 'POST')

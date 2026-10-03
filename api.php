@@ -681,6 +681,13 @@ try {
             $sort = (int)param('sort_order', 0);
             $active = (int)param('is_active', 1) === 1 ? 1 : 0;
             $notice = trim((string)param('notice', ''));
+            // 未提交 notice 字段时沿用原公告, 避免「一键启用/停用」把公告清空
+            if ($id > 0 && !has_param('notice')) {
+                $stn = db()->prepare('SELECT notice FROM social_groups WHERE id = ?');
+                $stn->execute([$id]);
+                $oldN = $stn->fetch();
+                if ($oldN) $notice = (string)($oldN['notice'] ?? '');
+            }
             $st = db()->prepare('SELECT id FROM social_groups WHERE name = ? AND id <> ?');
             $st->execute([$name, $id]);
             if ($st->fetch()) json_error('已存在同名群组');
