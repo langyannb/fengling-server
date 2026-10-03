@@ -85,5 +85,10 @@ export async function uploadFile(action, file, onProgress) {
 /** 表格分页/搜索通用的小工具 */
 export function pickList(res) {
   if (!res || res.code !== 0) { if (res && res.code !== 401) Message.error(res?.msg || '加载失败'); return [] }
-  return res.data || []
+  const d = res.data
+  if (Array.isArray(d)) return d
+  // 分页类接口返回 { list, total, page, page_size }, 也要兼容,
+  // 否则 v-for 会去遍历对象的 key —— 表现为「只有一个未命名的 XXX」
+  if (d && Array.isArray(d.list)) return d.list
+  return []
 }
