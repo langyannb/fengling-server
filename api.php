@@ -272,6 +272,8 @@ try {
             $st = db()->prepare('SELECT * FROM users WHERE id = ?');
             $st->execute([$uid]);
             $newUser = $st->fetch();
+            // 注册成功推送欢迎通知, 让「我的 - 消息」有初始内容
+            notify_push($uid, '欢迎加入风铃分享库', "你好, " . $nickname . "!\n账号已创建成功, 邮箱已验证。\n可到「我的 - 社交」参与群组聊天, 有问题欢迎在群里反馈。", 'system');
             json_out(['token' => $token, 'user' => user_public($newUser)]);
 
         // ============ 我的账号 (需登录) ============
@@ -425,6 +427,10 @@ try {
                 }
                 $args[] = $id;
                 db()->prepare('UPDATE users SET ' . implode(', ', $fields) . ' WHERE id = ?')->execute($args);
+                // 由封禁改为启用时推一条通知
+                if ($active === 1 && (int)$old['is_active'] === 0) {
+                    notify_push($id, '账号已恢复', "你的账号已由管理员解除封禁, 现在可以正常登录使用了。", 'admin');
+                }
             } else {
                 if (strlen($password) < 6) json_error('密码至少 6 位');
                 $emailVal = $email === '' ? null : $email;
