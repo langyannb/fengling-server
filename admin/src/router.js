@@ -19,6 +19,7 @@ const routes = [
       { path: 'harm', name: 'harm', component: () => import('./views/Harm.vue'), meta: { title: '和谐反馈', icon: 'IconExclamationCircle', group: 'settings' } },
       { path: 'about', name: 'about', component: () => import('./views/About.vue'), meta: { title: '关于/联系方式', icon: 'IconSettings', group: 'settings' } },
       { path: 'uc', name: 'uc', component: () => import('./views/UcAccount.vue'), meta: { title: 'UC 网盘', icon: 'IconLink', group: 'settings' } },
+      { path: 'users', name: 'users', component: () => import('./views/Users.vue'), meta: { title: '用户管理', icon: 'IconUser', group: 'settings' } },
     ],
   },
   { path: '/:pathMatch(.*)*', redirect: '/stats' },

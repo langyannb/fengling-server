@@ -33,6 +33,7 @@
       <a-menu-item key="harm">和谐反馈</a-menu-item>
       <a-menu-item key="about">关于/联系方式</a-menu-item>
       <a-menu-item key="uc">UC 网盘</a-menu-item>
+      <a-menu-item key="users">用户管理</a-menu-item>
     </a-sub-menu>
   </a-menu>
 </template>
