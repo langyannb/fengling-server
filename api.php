@@ -20,6 +20,7 @@ register_shutdown_function(function () {
 require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/uc.php';
 require_once __DIR__ . '/apk.php';
+require_once __DIR__ . '/mailer.php';
 
 header('Access-Control-Allow-Origin: *');
 header('Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS');
@@ -177,11 +178,12 @@ try {
     switch ($action) {
         // ============ 认证 ============
         case 'login':
-            $username = param('username', '');
+            // 支持用「用户名」或「邮箱」登录
+            $username = trim(param('username', ''));
             $password = param('password', '');
             if (!$username || !$password) json_error('用户名和密码不能为空');
-            $stmt = db()->prepare('SELECT * FROM users WHERE username = ? AND is_active = 1');
-            $stmt->execute([$username]);
+            $stmt = db()->prepare("SELECT * FROM users WHERE (username = ? OR (email <> '' AND email = ?)) AND is_active = 1");
+            $stmt->execute([$username, $username]);
             $user = $stmt->fetch();
             if (!$user || !password_verify($password, $user['password'])) {
                 json_error('用户名或密码错误');
@@ -190,15 +192,245 @@ try {
             // 多会话: 每个登录会话独立 token, 不覆盖 users.token (多设备登录互不顶掉)
             db()->prepare('UPDATE users SET token = ? WHERE id = ?')->execute([$token, $user['id']]);
             try { db()->prepare('INSERT INTO sessions (user_id, token) VALUES (?, ?)')->execute([$user['id'], $token]); } catch (Exception $e) {}
+            try { db()->prepare('UPDATE users SET last_login_at = NOW() WHERE id = ?')->execute([$user['id']]); } catch (Exception $e) {}
             json_out([
                 'token' => $token,
-                'user' => [
-                    'id' => (int)$user['id'],
-                    'username' => $user['username'],
-                    'nickname' => $user['nickname'],
-                    'role' => $user['role'],
-                ],
+                'user'  => user_public($user),
             ]);
+
+        // ============ 邮箱验证码 ============
+        // 限流: 同邮箱同用途 60 秒 1 条 / 同邮箱每天 10 条 / 同 IP 每小时 20 条
+        case 'send_code':
+            $email   = trim((string)param('email', ''));
+            $purpose = param('purpose', 'register') === 'reset' ? 'reset' : 'register';
+            if (!filter_var($email, FILTER_VALIDATE_EMAIL)) json_error('邮箱格式不正确');
+            $st = db()->prepare('SELECT id FROM users WHERE email = ?');
+            $st->execute([$email]);
+            $exists = (bool)$st->fetch();
+            if ($purpose === 'register' && $exists) json_error('该邮箱已被注册');
+            if ($purpose === 'reset' && !$exists) json_error('该邮箱尚未注册');
+            $st = db()->prepare('SELECT created_at FROM email_codes WHERE email = ? AND purpose = ? ORDER BY id DESC LIMIT 1');
+            $st->execute([$email, $purpose]);
+            $last = $st->fetchColumn();
+            if ($last && time() - strtotime($last) < 60) json_error('发送太频繁, 请 60 秒后再试');
+            $st = db()->prepare('SELECT COUNT(*) FROM email_codes WHERE email = ? AND purpose = ? AND created_at > DATE_SUB(NOW(), INTERVAL 1 DAY)');
+            $st->execute([$email, $purpose]);
+            if ((int)$st->fetchColumn() >= 10) json_error('今日发送次数已达上限');
+            $ip = client_ip();
+            $st = db()->prepare('SELECT COUNT(*) FROM email_codes WHERE ip = ? AND created_at > DATE_SUB(NOW(), INTERVAL 1 HOUR)');
+            $st->execute([$ip]);
+            if ((int)$st->fetchColumn() >= 20) json_error('操作过于频繁, 请稍后再试');
+            $code = str_pad((string)random_int(0, 999999), 6, '0', STR_PAD_LEFT);
+            db()->prepare('INSERT INTO email_codes (email, code, purpose, ip, expires_at) VALUES (?, ?, ?, ?, DATE_ADD(NOW(), INTERVAL 5 MINUTE))')
+                ->execute([$email, $code, $purpose, $ip]);
+            if (!Mailer::sendCode($email, $code, $purpose)) {
+                error_log('[send_code] 邮件发送失败: ' . $email);
+                json_error('邮件发送失败, 请稍后重试');
+            }
+            json_out(['expires_in' => 300]);
+
+        // ============ 注册 ============
+        case 'register':
+            $username = trim((string)param('username', ''));
+            $password = (string)param('password', '');
+            $nickname = trim((string)param('nickname', ''));
+            $email    = trim((string)param('email', ''));
+            $code     = trim((string)param('code', ''));
+            if (!preg_match('/^[A-Za-z0-9_]{3,20}$/', $username)) json_error('用户名只能包含字母数字下划线(3-20位)');
+            if (strlen($password) < 6) json_error('密码至少 6 位');
+            if (!filter_var($email, FILTER_VALIDATE_EMAIL)) json_error('邮箱格式不正确');
+            if ($nickname === '') $nickname = $username;
+            if (mb_strlen($nickname) > 20) json_error('昵称不能超过 20 个字');
+            $st = db()->prepare('SELECT id FROM users WHERE username = ?');
+            $st->execute([$username]);
+            if ($st->fetch()) json_error('用户名已存在');
+            $st = db()->prepare('SELECT id FROM users WHERE email = ?');
+            $st->execute([$email]);
+            if ($st->fetch()) json_error('该邮箱已被注册');
+            $st = db()->prepare("SELECT id, code, tries FROM email_codes WHERE email = ? AND purpose = 'register' AND used = 0 AND expires_at > NOW() ORDER BY id DESC LIMIT 1");
+            $st->execute([$email]);
+            $row = $st->fetch();
+            if (!$row) json_error('验证码错误或已过期');
+            if ((int)$row['tries'] >= 5) json_error('验证码错误次数过多, 请重新获取');
+            if (!hash_equals((string)$row['code'], $code)) {
+                db()->prepare('UPDATE email_codes SET tries = tries + 1 WHERE id = ?')->execute([$row['id']]);
+                json_error('验证码错误或已过期');
+            }
+            db()->prepare('UPDATE email_codes SET used = 1 WHERE id = ?')->execute([$row['id']]);
+            $emailVal = $email === '' ? null : $email;
+            db()->prepare("INSERT INTO users (username, password, nickname, email, email_verified, role, last_login_at) VALUES (?, ?, ?, ?, 1, 'user', NOW())")
+                ->execute([$username, password_hash($password, PASSWORD_DEFAULT), $nickname, $emailVal]);
+            $uid = (int)db()->lastInsertId();
+            $token = make_token();
+            $st = db()->prepare('SELECT * FROM users WHERE id = ?');
+            $st->execute([$uid]);
+            $newUser = $st->fetch();
+            json_out(['token' => $token, 'user' => user_public($newUser)]);
+
+        // ============ 我的账号 (需登录) ============
+        case 'user_me':
+            json_out(user_public(current_user_or_401()));
+
+        case 'user_update':
+            $me = current_user_or_401();
+            $fields = [];
+            $args = [];
+            if (has_param('nickname')) {
+                $nickname = trim((string)param('nickname', ''));
+                if ($nickname === '') json_error('昵称不能为空');
+                if (mb_strlen($nickname) > 20) json_error('昵称不能超过 20 个字');
+                $fields[] = 'nickname = ?'; $args[] = $nickname;
+            }
+            if (has_param('bio')) {
+                $bio = trim((string)param('bio', ''));
+                if (mb_strlen($bio) > 100) json_error('简介不能超过 100 个字');
+                $fields[] = 'bio = ?'; $args[] = $bio;
+            }
+            if (has_param('avatar')) {
+                $avatar = trim((string)param('avatar', ''));
+                if ($avatar !== '' && !preg_match('#^https?://#i', $avatar)) json_error('头像地址不合法');
+                $fields[] = 'avatar = ?'; $args[] = $avatar;
+            }
+            if (!$fields) json_error('没有需要更新的内容');
+            $args[] = $me['id'];
+            db()->prepare('UPDATE users SET ' . implode(', ', $fields) . ' WHERE id = ?')->execute($args);
+            $st = db()->prepare('SELECT * FROM users WHERE id = ?');
+            $st->execute([$me['id']]);
+            json_out(user_public($st->fetch()));
+
+        // 头像上传: multipart, 字段名 file; 压到 512 宽后传对象存储
+        case 'user_avatar':
+            $me = current_user_or_401();
+            if (empty($_FILES['file'])) json_error('未收到文件');
+            $file = $_FILES['file'];
+            $ext = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
+            if (!in_array($ext, ['jpg', 'jpeg', 'png', 'gif', 'webp'])) json_error('只支持 jpg / png / gif / webp 图片');
+            if ($file['size'] > 10 * 1024 * 1024) json_error('头像不能超过 10MB');
+            $raw = @file_get_contents($file['tmp_name']);
+            if ($raw === false || $raw === '') json_error('读取文件失败');
+            if (!@getimagesizefromstring($raw)) json_error('这不是一张有效的图片');
+            $raw = compress_image($raw, $ext, 512, 90);
+            $mime = in_array($ext, ['jpg', 'jpeg']) ? 'image/jpeg'
+                : ($ext === 'png' ? 'image/png' : ($ext === 'webp' ? 'image/webp' : 'image/gif'));
+            $key = s3_key('avatars', $ext === 'jpeg' ? 'jpg' : $ext);
+            if (!s3_upload_bytes($raw, $key, $mime)) json_error('上传失败, 请稍后重试');
+            $url = S3_PUBLIC_URL . '/' . $key;
+            db()->prepare('UPDATE users SET avatar = ? WHERE id = ?')->execute([$url, $me['id']]);
+            json_out(['url' => $url]);
+
+        case 'user_password':
+            $me  = current_user_or_401();
+            $old = (string)param('old_password', '');
+            $new = (string)param('new_password', '');
+            if (strlen($new) < 6) json_error('密码至少 6 位');
+            if (!password_verify($old, $me['password'])) json_error('原密码不正确');
+            db()->prepare('UPDATE users SET password = ? WHERE id = ?')
+                ->execute([password_hash($new, PASSWORD_DEFAULT), $me['id']]);
+            json_out(null);
+
+        // ============ 用户管理 (管理员) ============
+        case 'admin_users':
+            require_admin();
+            $page   = max(1, (int)param('page', 1));
+            $size   = min(100, max(1, (int)param('page_size', 20)));
+            $kw     = trim((string)param('keyword', ''));
+            $role   = (string)param('role', '');
+            $active = (string)param('is_active', '');
+            $where = []; $args = [];
+            if ($kw !== '') {
+                $where[] = '(username LIKE ? OR nickname LIKE ? OR email LIKE ?)';
+                $like = '%' . $kw . '%';
+                array_push($args, $like, $like, $like);
+            }
+            if (in_array($role, ['user', 'admin'], true)) { $where[] = 'role = ?'; $args[] = $role; }
+            if ($active === '0' || $active === '1') { $where[] = 'is_active = ?'; $args[] = (int)$active; }
+            $wsql = $where ? (' WHERE ' . implode(' AND ', $where)) : '';
+            $st = db()->prepare('SELECT COUNT(*) FROM users' . $wsql);
+            $st->execute($args);
+            $total = (int)$st->fetchColumn();
+            $st = db()->prepare('SELECT * FROM users' . $wsql . ' ORDER BY id ASC LIMIT ' . (($page - 1) * $size) . ', ' . $size);
+            $st->execute($args);
+            json_out([
+                'list'      => array_map('user_public', $st->fetchAll()),
+                'total'     => $total,
+                'page'      => $page,
+                'page_size' => $size,
+            ]);
+
+        case 'admin_user_save':
+            require_admin();
+            $self     = current_user_or_401();
+            $id       = (int)param('id', 0);
+            $username = trim((string)param('username', ''));
+            $password = (string)param('password', '');
+            $nickname = trim((string)param('nickname', ''));
+            $email    = trim((string)param('email', ''));
+            $bio      = trim((string)param('bio', ''));
+            $role     = param('role', 'user') === 'admin' ? 'admin' : 'user';
+            $active   = (int)param('is_active', 1) ? 1 : 0;
+            if (!preg_match('/^[A-Za-z0-9_]{3,20}$/', $username)) json_error('用户名只能包含字母数字下划线(3-20位)');
+            if ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) json_error('邮箱格式不正确');
+            if ($nickname === '') $nickname = $username;
+            if (mb_strlen($nickname) > 20) json_error('昵称不能超过 20 个字');
+            if (mb_strlen($bio) > 100) json_error('简介不能超过 100 个字');
+            $st = db()->prepare('SELECT id FROM users WHERE username = ? AND id <> ?');
+            $st->execute([$username, $id]);
+            if ($st->fetch()) json_error('用户名已存在');
+            if ($email !== '') {
+                $st = db()->prepare('SELECT id FROM users WHERE email = ? AND id <> ?');
+                $st->execute([$email, $id]);
+                if ($st->fetch()) json_error('该邮箱已被注册');
+            }
+            if ($id > 0) {
+                $st = db()->prepare('SELECT * FROM users WHERE id = ?');
+                $st->execute([$id]);
+                $old = $st->fetch();
+                if (!$old) json_error('用户不存在');
+                if ((int)$self['id'] === $id && ($role !== 'admin' || $active === 0)) {
+                    json_error('不能修改自己的角色, 也不能禁用自己的账号');
+                }
+                $emailVal = $email === '' ? null : $email;
+                $fields = ['username = ?', 'nickname = ?', 'email = ?', 'role = ?', 'is_active = ?', 'bio = ?'];
+                $args   = [$username, $nickname, $emailVal, $role, $active, $bio];
+                if ($password !== '') {
+                    if (strlen($password) < 6) json_error('密码至少 6 位');
+                    $fields[] = 'password = ?';
+                    $args[]   = password_hash($password, PASSWORD_DEFAULT);
+                }
+                if ($email !== '' && $email !== (string)$old['email']) {
+                    $fields[] = 'email_verified = ?';
+                    $args[]   = 0;
+                }
+                $args[] = $id;
+                db()->prepare('UPDATE users SET ' . implode(', ', $fields) . ' WHERE id = ?')->execute($args);
+            } else {
+                if (strlen($password) < 6) json_error('密码至少 6 位');
+                $emailVal = $email === '' ? null : $email;
+                db()->prepare('INSERT INTO users (username, password, nickname, email, email_verified, role, is_active, bio) VALUES (?, ?, ?, ?, 0, ?, ?, ?)')
+                    ->execute([$username, password_hash($password, PASSWORD_DEFAULT), $nickname, $emailVal, $role, $active, $bio]);
+                $id = (int)db()->lastInsertId();
+            }
+            $st = db()->prepare('SELECT * FROM users WHERE id = ?');
+            $st->execute([$id]);
+            json_out(user_public($st->fetch()));
+
+        case 'admin_user_delete':
+            require_admin();
+            $self = current_user_or_401();
+            $id   = (int)param('id', 0);
+            if ($id <= 0) json_error('参数错误');
+            if ((int)$self['id'] === $id) json_error('不能删除自己的账号');
+            $st = db()->prepare('SELECT role FROM users WHERE id = ?');
+            $st->execute([$id]);
+            $u = $st->fetch();
+            if (!$u) json_error('用户不存在');
+            if ($u['role'] === 'admin') {
+                $n = (int)db()->query("SELECT COUNT(*) FROM users WHERE role = 'admin' AND is_active = 1")->fetchColumn();
+                if ($n <= 1) json_error('至少保留一个管理员');
+            }
+            db()->prepare('DELETE FROM sessions WHERE user_id = ?')->execute([$id]);
+            db()->prepare('DELETE FROM users WHERE id = ?')->execute([$id]);
+            json_out(null);
 
         case 'logout':
             $token = param('token', '');
@@ -1117,4 +1349,56 @@ function insert_app(): int
             param('release_date', '') ?: null,
         ]);
     return (int)db()->lastInsertId();
+}
+
+/** 参数是否被提交过 (用于「留空不改」类更新) */
+function has_param(string $key): bool
+{
+    return array_key_exists($key, $_POST) || array_key_exists($key, $_GET);
+}
+
+/** 当前登录用户完整行 (未登录返回 null; 兼容 sessions 表与旧 users.token) */
+function current_user(): ?array
+{
+    $auth = $_SERVER['HTTP_AUTHORIZATION'] ?? '';
+    $token = '';
+    if (preg_match('/Bearer\s+(\S+)/i', $auth, $m)) {
+        $token = $m[1];
+    } else {
+        $token = param('token', '');
+    }
+    if (!$token) return null;
+    $stmt = db()->prepare('SELECT u.* FROM sessions s JOIN users u ON s.user_id = u.id WHERE s.token = ? AND u.is_active = 1');
+    $stmt->execute([$token]);
+    $u = $stmt->fetch();
+    if ($u) return $u;
+    $stmt = db()->prepare('SELECT * FROM users WHERE token = ? AND is_active = 1');
+    $stmt->execute([$token]);
+    $u = $stmt->fetch();
+    return $u ?: null;
+}
+
+/** 当前登录用户, 未登录直接 401 */
+function current_user_or_401(): array
+{
+    $u = current_user();
+    if (!$u) json_error('登录已失效', 401);
+    return $u;
+}
+
+/** 对外输出的用户字段 (剔除密码 / token / 敏感列) */
+function user_public(array $u): array
+{
+    return [
+        'id'             => (int)$u['id'],
+        'username'       => $u['username'],
+        'nickname'       => $u['nickname'] ?? '',
+        'email'          => $u['email'] ?? '',
+        'email_verified' => (int)($u['email_verified'] ?? 0),
+        'avatar'         => $u['avatar'] ?? '',
+        'bio'            => $u['bio'] ?? '',
+        'role'           => $u['role'] ?? 'user',
+        'is_active'      => (int)($u['is_active'] ?? 1),
+        'created_at'     => $u['created_at'] ?? '',
+    ];
 }
