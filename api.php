@@ -624,6 +624,16 @@ try {
             if ((int)$me['is_active'] !== 1) json_error('你已被封禁', 403);
             $gid = (int)param('group_id', 0);
             $g = social_group_or_404($gid, false);
+            // 管理员禁言: 群里 / 全站被禁言的用户不能发言 (管理员不受限)
+            if (($me['role'] ?? '') !== 'admin') {
+                $muteState = user_mute_state((int)$me['id'], $gid);
+                if ($muteState) {
+                    $leftTxt = mute_left_text($muteState);
+                    $why = trim((string)($muteState['reason'] ?? ''));
+                    json_error('你已被禁言' . ($leftTxt !== '' ? ' (' . $leftTxt . ')' : '')
+                        . ($why !== '' ? ', 原因: ' . $why : ''), 403);
+                }
+            }
             $content = trim((string)param('content', ''));
             if ($content === '') json_error('消息内容不能为空');
             if (mb_strlen($content) > 500) json_error('消息不能超过 500 个字');
@@ -753,15 +763,69 @@ try {
             $list = [];
             foreach ($st->fetchAll() as $u) {
                 $nick = trim((string)($u['nickname'] ?? ''));
+                $mu = user_mute_state((int)$u['id'], $gid);
                 $list[] = [
                     'id' => (int)$u['id'],
                     'nickname' => $nick !== '' ? $nick : (string)$u['username'],
                     'username' => (string)$u['username'],
                     'avatar' => (string)($u['avatar'] ?? ''),
                     'role' => (string)$u['role'],
+                    'muted' => $mu ? 1 : 0,
+                    'mute_left' => $mu ? mute_left_text($mu) : '',
+                    'mute_reason' => $mu ? (string)($mu['reason'] ?? '') : '',
                 ];
             }
             json_out(['list' => $list]);
+
+        // ============ 群内禁言 (管理员) ============
+        case 'admin_user_mute':
+            require_admin();
+            $uid = (int)param('user_id', 0);
+            $gid = (int)param('group_id', 0);
+            $minutes = (int)param('minutes', 60);
+            $reason = trim((string)param('reason', ''));
+            if (mb_strlen($reason) > 60) json_error('禁言原因不能超过 60 个字');
+            $st = db()->prepare('SELECT id, nickname, username, role FROM users WHERE id = ?');
+            $st->execute([$uid]);
+            $u = $st->fetch();
+            if (!$u) json_error('用户不存在');
+            if (($u['role'] ?? '') === 'admin') json_error('不能禁言管理员');
+            if ($gid > 0) social_group_or_404($gid, false);
+            if ($minutes < 0) $minutes = 0;
+            if ($minutes > 432000) $minutes = 432000; // 上限 300 天, 0 = 永久
+            $until = $minutes > 0 ? date('Y-m-d H:i:s', time() + $minutes * 60) : null;
+            db()->prepare('INSERT INTO social_user_mutes (group_id, user_id, until_at, reason, created_by, created_at)
+                           VALUES (?, ?, ?, ?, ?, NOW())
+                           ON DUPLICATE KEY UPDATE until_at = VALUES(until_at), reason = VALUES(reason),
+                                                   created_by = VALUES(created_by), created_at = NOW()')
+                ->execute([$gid, $uid, $until, $reason, (int)current_user()['id']]);
+            $mute = ['until_at' => $until, 'reason' => $reason];
+            $leftTxt = mute_left_text($mute);
+            $gname = '';
+            if ($gid > 0) {
+                $st = db()->prepare('SELECT name FROM social_groups WHERE id = ?');
+                $st->execute([$gid]);
+                $gname = (string)($st->fetchColumn() ?: '');
+            }
+            notify_push($uid, '你已被禁言',
+                ($gname !== '' ? '在「' . $gname . '」' : '全站') . '被管理员禁言' .
+                ($leftTxt !== '' ? ', ' . $leftTxt : '') . ($reason !== '' ? ', 原因: ' . $reason : ''),
+                'admin');
+            json_out(['user_id' => $uid, 'group_id' => $gid, 'until_at' => (string)($until ?? ''),
+                      'left_text' => $leftTxt, 'reason' => $reason]);
+
+        case 'admin_user_unmute':
+            require_admin();
+            $uid = (int)param('user_id', 0);
+            $gid = (int)param('group_id', 0);
+            if ($uid <= 0) json_error('参数错误');
+            $del = db()->prepare('DELETE FROM social_user_mutes WHERE user_id = ? AND group_id = ?');
+            $del->execute([$uid, $gid]);
+            $n = $del->rowCount();
+            if ($n > 0) {
+                notify_push($uid, '禁言已解除', '管理员已解除你的禁言, 现在可以正常发言了', 'admin');
+            }
+            json_out(['user_id' => $uid, 'group_id' => $gid, 'removed' => $n]);
 
         // ============ 消息通知 ============
         case 'notifications':
@@ -2117,6 +2181,35 @@ function notify_push(int $userId, string $title, string $content, string $type =
 }
 
 /** 当前登录用户开了免打扰的群 id 集合 (key = group_id) */
+/**
+ * 用户在某群是否被管理员禁言 (过期自动清理)
+ * group_id = 0 表示全站禁言
+ */
+function user_mute_state(int $uid, int $gid): ?array {
+    $st = db()->prepare('SELECT id, group_id, until_at, reason FROM social_user_mutes
+                         WHERE user_id = ? AND (group_id = ? OR group_id = 0)
+                         ORDER BY group_id DESC LIMIT 1');
+    $st->execute([$uid, $gid]);
+    $row = $st->fetch();
+    if (!$row) return null;
+    if (!empty($row['until_at']) && strtotime($row['until_at']) <= time()) {
+        db()->prepare('DELETE FROM social_user_mutes WHERE id = ?')->execute([(int)$row['id']]);
+        return null;
+    }
+    return $row;
+}
+
+/** 禁言剩余时长文案: 永久 / 剩余 x 天|小时|分钟 */
+function mute_left_text(?array $mute): string {
+    if (!$mute) return '';
+    if (empty($mute['until_at'])) return '永久';
+    $left = strtotime($mute['until_at']) - time();
+    if ($left <= 0) return '';
+    if ($left >= 86400) return '剩余 ' . max(1, (int)floor($left / 86400)) . ' 天';
+    if ($left >= 3600) return '剩余 ' . max(1, (int)floor($left / 3600)) . ' 小时';
+    return '剩余 ' . max(1, (int)ceil($left / 60)) . ' 分钟';
+}
+
 function my_muted_ids(): array
 {
     $u = current_user();
