@@ -552,12 +552,22 @@ try {
             $me = current_user_or_401();
             $gid = (int)param('group_id', 0);
             $after = (int)param('after_id', 0);
+            $around = (int)param('around_id', 0);
             $limit = min(50, max(1, (int)param('limit', 30)));
             social_group_or_404($gid, false);
             $sql = "SELECT m.*, u.nickname, u.username, u.avatar, u.role
                     FROM social_messages m LEFT JOIN users u ON u.id = m.user_id
                     WHERE m.group_id = ?";
-            if ($after > 0) {
+            if ($around > 0) {
+                // 从通知点进来时用: 目标消息放中间, 前后各取一半, 这样既看得到上下文也能继续往下翻
+                $half = (int)max(5, floor($limit / 2));
+                $st = db()->prepare($sql . ' AND m.id <= ? ORDER BY m.id DESC LIMIT ' . $half);
+                $st->execute([$gid, $around]);
+                $before = array_reverse($st->fetchAll());
+                $st = db()->prepare($sql . ' AND m.id > ? ORDER BY m.id ASC LIMIT ' . $half);
+                $st->execute([$gid, $around]);
+                $rows = array_merge($before, $st->fetchAll());
+            } elseif ($after > 0) {
                 $st = db()->prepare($sql . ' AND m.id > ? ORDER BY m.id ASC LIMIT ' . $limit);
                 $st->execute([$gid, $after]);
                 $rows = $st->fetchAll();
@@ -622,7 +632,8 @@ try {
                 $st = db()->prepare('SELECT id FROM users WHERE id IN (' . $in . ') AND is_active = 1');
                 $st->execute($at);
                 foreach ($st->fetchAll() as $t) {
-                    notify_push((int)$t['id'], '有人在「' . $g['name'] . '」@了你', mb_substr($content, 0, 80), 'social');
+                    // link 里带上群 id 与消息 id, 客户端点通知能直接跳进群并定位到这条消息
+                    notify_push((int)$t['id'], '有人在「' . $g['name'] . '」@了你', mb_substr($content, 0, 80), 'social', 'msg:' . $gid . ':' . $mid);
                 }
             }
             // 普通群消息提醒: 给群内其他成员推一条「「X」新消息」(同一未读合并, 不刷屏)。
@@ -640,7 +651,7 @@ try {
                     $uid = (int)$uid;
                     if (isset($atSet[$uid])) continue;
                     if (isset($mutedIds[$uid])) continue;
-                    notify_merge($uid, '「' . $g['name'] . '」新消息', $senderName . ': ' . $brief, 'social', 'group:' . $gid);
+                    notify_merge($uid, '「' . $g['name'] . '」新消息', $senderName . ': ' . $brief, 'social', 'msg:' . $gid . ':' . $mid);
                 }
             }
             json_out(['id' => $mid, 'at_all' => $atAll ? 1 : 0, 'created_at' => date('Y-m-d H:i:s')]);
@@ -673,7 +684,7 @@ try {
                 $st = db()->prepare('SELECT id FROM users WHERE is_active = 1 AND id <> ?');
                 $st->execute([(int)current_user()['id']]);
                 foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $uid) {
-                    notify_merge((int)$uid, '「' . $g['name'] . '」群公告更新', mb_substr($notice, 0, 80), 'social', 'group:' . $gid);
+                    notify_merge((int)$uid, '「' . $g['name'] . '」群公告更新', mb_substr($notice, 0, 80), 'social', 'notice:' . $gid);
                 }
             }
             json_out(['ok' => true, 'notified' => $notice !== '']);
@@ -732,12 +743,18 @@ try {
             $st = db()->prepare('SELECT COUNT(*) FROM notifications WHERE user_id = ? AND is_read = 0');
             $st->execute([(int)$me['id']]);
             $unread = (int)$st->fetchColumn();
+            // 分类未读数 (系统通知 / 管理员公告 / 群聊相关), 客户端「消息」页要显示「新消息 N 条」
+            $st = db()->prepare('SELECT type, COUNT(*) AS c FROM notifications WHERE user_id = ? AND is_read = 0 GROUP BY type');
+            $st->execute([(int)$me['id']]);
+            $byType = [];
+            foreach ($st->fetchAll() as $r2) { $byType[(string)$r2['type']] = (int)$r2['c']; }
             $off = ($page - 1) * $ps;
             $st = db()->prepare('SELECT * FROM notifications WHERE ' . $cond . ' ORDER BY id DESC LIMIT ' . $ps . ' OFFSET ' . $off);
             $st->execute([(int)$me['id']]);
             json_out([
                 'list' => array_map('notify_public', $st->fetchAll()),
-                'total' => $total, 'unread' => $unread, 'page' => $page, 'page_size' => $ps,
+                'total' => $total, 'unread' => $unread, 'unread_by_type' => $byType,
+                'page' => $page, 'page_size' => $ps,
             ]);
 
         case 'notification_read':
