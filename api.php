@@ -559,9 +559,12 @@ try {
                 $ids = [];
                 foreach ($rows as $r) { $ids[] = (int)$r['user_id']; }
                 $names = [];
-                $in = implode(',', array_fill(0, count($ids), '?'));
+                // 注意: 占位符个数必须按「去重后」的 id 数生成, 否则同一人发多条消息时
+                // 会出现 SQLSTATE[HY093] number of bound variables does not match number of tokens
+                $uniqIds = array_values(array_unique($ids));
+                $in = implode(',', array_fill(0, count($uniqIds), '?'));
                 $st = db()->prepare('SELECT id, nickname, username FROM users WHERE id IN (' . $in . ')');
-                $st->execute(array_values(array_unique($ids)));
+                $st->execute($uniqIds);
                 foreach ($st->fetchAll() as $u2) {
                     $names[(int)$u2['id']] = $u2['nickname'] !== '' ? $u2['nickname'] : $u2['username'];
                 }
@@ -1667,7 +1670,7 @@ try {
             json_error('未知操作: ' . $action, 404);
     }
 } catch (Throwable $e) {
-    json_error('服务器错误: ' . $e->getMessage(), 500);
+    json_error('服务器错误: ' . $e->getMessage() . ' @ ' . basename($e->getFile()) . ':' . $e->getLine(), 500);
 }
 
 /** 分类是否存在 */
