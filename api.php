@@ -553,8 +553,15 @@ try {
                     (SELECT COUNT(*) FROM social_messages m WHERE m.group_id = g.id AND m.is_recalled = 0) AS message_count
                 FROM social_groups g WHERE g.is_active = 1 ORDER BY g.sort_order ASC, g.id ASC")->fetchAll();
             $muted = my_muted_ids();
-            json_out(['list' => array_map(function ($g) use ($muted) {
-                return social_group_public($g, isset($muted[(int)$g['id']]) ? 1 : 0);
+            $unread = my_unread_map();
+            json_out(['list' => array_map(function ($g) use ($muted, $unread) {
+                $gid = (int)$g['id'];
+                return social_group_public(
+                    $g,
+                    isset($muted[$gid]) ? 1 : 0,
+                    (int)($unread[$gid]['count'] ?? 0),
+                    (int)($unread[$gid]['first_id'] ?? 0)
+                );
             }, $rows)]);
 
         case 'social_group':
@@ -565,8 +572,14 @@ try {
             $st2 = db()->query("SELECT COUNT(DISTINCT user_id) AS c FROM social_messages WHERE group_id = " . $gid);
             $g['member_count'] = (int)($st2->fetch()['c'] ?? 0);
             $muted = my_muted_ids();
+            $unread = my_unread_map();
             json_out([
-                'group'  => social_group_public($g, isset($muted[$gid]) ? 1 : 0),
+                'group'  => social_group_public(
+                    $g,
+                    isset($muted[$gid]) ? 1 : 0,
+                    (int)($unread[$gid]['count'] ?? 0),
+                    (int)($unread[$gid]['first_id'] ?? 0)
+                ),
                 'notice' => (string)($g['notice'] ?? ''),
                 'admins' => $st->fetchAll(),
             ]);
@@ -640,7 +653,37 @@ try {
                     }
                 }
             }
-            json_out(['list' => array_map('social_msg_public', $rows), 'has_more' => count($rows) >= $limit]);
+            // 未读定位: 返回「第一条未读消息 id」和未读条数, 客户端据此把列表初始化到那里并高亮;
+            // 读取本身不改已读位置, 由客户端展示完后调 social_read 标记 (避免刷新一下就误标已读)
+            $unread = my_unread_map();
+            json_out([
+                'list'            => array_map('social_msg_public', $rows),
+                'has_more'        => count($rows) >= $limit,
+                'unread'          => (int)($unread[$gid]['count'] ?? 0),
+                'first_unread_id' => (int)($unread[$gid]['first_id'] ?? 0),
+                'my_id'           => (int)$me['id'],
+            ]);
+
+        case 'social_read':
+            // 把某群标记为已读 (last_id 不传则取该群最新一条消息 id)
+            $me = current_user_or_401();
+            $gid = (int)param('group_id', 0);
+            social_group_or_404($gid, false);
+            $lastId = (int)param('last_id', 0);
+            if ($lastId <= 0) {
+                $st = db()->prepare('SELECT COALESCE(MAX(id), 0) FROM social_messages WHERE group_id = ?');
+                $st->execute([$gid]);
+                $lastId = (int)$st->fetchColumn();
+            }
+            db()->prepare('INSERT INTO social_reads (user_id, group_id, last_read_id, updated_at)
+                           VALUES (?, ?, ?, NOW())
+                           ON DUPLICATE KEY UPDATE last_read_id = GREATEST(last_read_id, VALUES(last_read_id)), updated_at = NOW()')
+                ->execute([(int)$me['id'], $gid, $lastId]);
+            // 回读真实已读位置 (GREATEST 保证不会回退, 传更小的 last_id 时库里仍是较大的值)
+            $st = db()->prepare('SELECT last_read_id FROM social_reads WHERE user_id = ? AND group_id = ?');
+            $st->execute([(int)$me['id'], $gid]);
+            $stored = (int)$st->fetchColumn();
+            json_out(['ok' => true, 'last_read_id' => $stored]);
 
         case 'social_image_upload':
             // 群聊图片: 先上传拿到对象存储地址, 再带着这个地址调 social_send 发消息
@@ -2165,10 +2208,12 @@ function captcha_check(string $token, string $code): bool
 }
 
 /** 群组字段转公开结构 (需带 member_count/message_count/notice) */
-function social_group_public(array $g, int $muted = 0): array
+function social_group_public(array $g, int $muted = 0, int $unread = 0, int $firstUnreadId = 0): array
 {
     return [
         'muted'         => $muted,
+        'unread'        => $unread,
+        'first_unread_id' => $firstUnreadId,
         'id'            => (int)$g['id'],
         'name'          => (string)$g['name'],
         'icon'          => (string)($g['icon'] ?? ''),
@@ -2286,6 +2331,31 @@ function my_muted_ids(): array
         $st = db()->prepare('SELECT group_id FROM social_mutes WHERE user_id = ?');
         $st->execute([(int)$u['id']]);
         return array_flip(array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN)));
+    } catch (Exception $e) {
+        return [];
+    }
+}
+
+/**
+ * 当前用户在各个群里的未读情况: [gid => ['count' => 条数, 'first_id' => 第一条未读消息 id]]
+ * 只统计别人发的、未撤回的、且 id 大于自己 last_read_id 的消息; 未登录返回空数组
+ */
+function my_unread_map(): array
+{
+    $u = current_user();
+    if (!$u) return [];
+    try {
+        $st = db()->prepare('SELECT m.group_id, COUNT(*) AS c, MIN(m.id) AS first_id
+                FROM social_messages m
+                LEFT JOIN social_reads r ON r.group_id = m.group_id AND r.user_id = ?
+                WHERE m.is_recalled = 0 AND m.user_id <> ? AND m.id > COALESCE(r.last_read_id, 0)
+                GROUP BY m.group_id');
+        $st->execute([(int)$u['id'], (int)$u['id']]);
+        $out = [];
+        foreach ($st->fetchAll() as $r) {
+            $out[(int)$r['group_id']] = ['count' => (int)$r['c'], 'first_id' => (int)$r['first_id']];
+        }
+        return $out;
     } catch (Exception $e) {
         return [];
     }
