@@ -529,7 +529,10 @@ try {
                     (SELECT COUNT(DISTINCT m.user_id) FROM social_messages m WHERE m.group_id = g.id) AS member_count,
                     (SELECT COUNT(*) FROM social_messages m WHERE m.group_id = g.id AND m.is_recalled = 0) AS message_count
                 FROM social_groups g WHERE g.is_active = 1 ORDER BY g.sort_order ASC, g.id ASC")->fetchAll();
-            json_out(['list' => array_map('social_group_public', $rows)]);
+            $muted = my_muted_ids();
+            json_out(['list' => array_map(function ($g) use ($muted) {
+                return social_group_public($g, isset($muted[(int)$g['id']]) ? 1 : 0);
+            }, $rows)]);
 
         case 'social_group':
             $gid = (int)param('id', 0);
@@ -538,7 +541,12 @@ try {
             $st->execute([$gid]);
             $st2 = db()->query("SELECT COUNT(DISTINCT user_id) AS c FROM social_messages WHERE group_id = " . $gid);
             $g['member_count'] = (int)($st2->fetch()['c'] ?? 0);
-            json_out(['group' => social_group_public($g), 'notice' => (string)($g['notice'] ?? ''), 'admins' => $st->fetchAll()]);
+            $muted = my_muted_ids();
+            json_out([
+                'group'  => social_group_public($g, isset($muted[$gid]) ? 1 : 0),
+                'notice' => (string)($g['notice'] ?? ''),
+                'admins' => $st->fetchAll(),
+            ]);
 
         case 'social_messages':
             $me = current_user_or_401();
@@ -617,6 +625,24 @@ try {
                     notify_push((int)$t['id'], '有人在「' . $g['name'] . '」@了你', mb_substr($content, 0, 80), 'social');
                 }
             }
+            // 普通群消息提醒: 给群内其他成员推一条「「X」新消息」(同一未读合并, 不刷屏)。
+            // 开过免打扰的跳过; 已经被 @ 单独提醒过的人不再重复推。
+            // @所有人 时上面已经给所有人推过通知, 这里不再重复。
+            if (!$atAll) {
+                $atSet = [];
+                foreach ($at as $aid) { $atSet[(int)$aid] = true; }
+                $mutedIds = mute_user_ids($gid);
+                $senderName = (string)(($me['nickname'] ?? '') !== '' ? $me['nickname'] : ($me['username'] ?? ''));
+                $brief = mb_substr($content, 0, 60);
+                $st = db()->prepare('SELECT id FROM users WHERE is_active = 1 AND id <> ?');
+                $st->execute([(int)$me['id']]);
+                foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $uid) {
+                    $uid = (int)$uid;
+                    if (isset($atSet[$uid])) continue;
+                    if (isset($mutedIds[$uid])) continue;
+                    notify_merge($uid, '「' . $g['name'] . '」新消息', $senderName . ': ' . $brief, 'social', 'group:' . $gid);
+                }
+            }
             json_out(['id' => $mid, 'at_all' => $atAll ? 1 : 0, 'created_at' => date('Y-m-d H:i:s')]);
 
         case 'social_recall':
@@ -642,7 +668,30 @@ try {
             $notice = trim((string)param('notice', ''));
             if (mb_strlen($notice) > 500) json_error('公告不能超过 500 个字');
             db()->prepare('UPDATE social_groups SET notice = ? WHERE id = ?')->execute([$notice, $gid]);
-            json_out(['ok' => true]);
+            // 公告是重要信息, 开了免打扰也提醒 (和 QQ 一样)
+            if ($notice !== '') {
+                $st = db()->prepare('SELECT id FROM users WHERE is_active = 1 AND id <> ?');
+                $st->execute([(int)current_user()['id']]);
+                foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $uid) {
+                    notify_merge((int)$uid, '「' . $g['name'] . '」群公告更新', mb_substr($notice, 0, 80), 'social', 'group:' . $gid);
+                }
+            }
+            json_out(['ok' => true, 'notified' => $notice !== '']);
+
+        // 消息免打扰 (每个用户对自己生效)
+        case 'social_mute_set':
+            $me = current_user_or_401();
+            $gid = (int)param('group_id', 0);
+            social_group_or_404($gid, false);
+            $muted = (int)param('muted', 0) === 1 ? 1 : 0;
+            if ($muted) {
+                db()->prepare('INSERT IGNORE INTO social_mutes (group_id, user_id, created_at) VALUES (?, ?, NOW())')
+                    ->execute([$gid, (int)$me['id']]);
+            } else {
+                db()->prepare('DELETE FROM social_mutes WHERE group_id = ? AND user_id = ?')
+                    ->execute([$gid, (int)$me['id']]);
+            }
+            json_out(['group_id' => $gid, 'muted' => $muted]);
 
         // 群成员候选 (供客户端 @ 选择): 在该群发过言的活跃用户 + 全部管理员, 排除自己
         case 'social_group_members':
@@ -1937,9 +1986,10 @@ function captcha_check(string $token, string $code): bool
 }
 
 /** 群组字段转公开结构 (需带 member_count/message_count/notice) */
-function social_group_public(array $g): array
+function social_group_public(array $g, int $muted = 0): array
 {
     return [
+        'muted'         => $muted,
         'id'            => (int)$g['id'],
         'name'          => (string)$g['name'],
         'icon'          => (string)($g['icon'] ?? ''),
@@ -2010,6 +2060,55 @@ function notify_push(int $userId, string $title, string $content, string $type =
             ->execute([$userId, $title, $content, $type, $link]);
     } catch (Exception $e) {
         error_log('[notify_push] ' . $e->getMessage());
+    }
+}
+
+/** 当前登录用户开了免打扰的群 id 集合 (key = group_id) */
+function my_muted_ids(): array
+{
+    $u = current_user();
+    if (!$u) return [];
+    try {
+        $st = db()->prepare('SELECT group_id FROM social_mutes WHERE user_id = ?');
+        $st->execute([(int)$u['id']]);
+        return array_flip(array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN)));
+    } catch (Exception $e) {
+        return [];
+    }
+}
+
+/** 某个群里开了免打扰的用户 id 集合 (key = user_id) */
+function mute_user_ids(int $gid): array
+{
+    try {
+        $st = db()->prepare('SELECT user_id FROM social_mutes WHERE group_id = ?');
+        $st->execute([$gid]);
+        return array_flip(array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN)));
+    } catch (Exception $e) {
+        return [];
+    }
+}
+
+/**
+ * 合并推送: 同一用户已经有同标题的未读通知时只更新它, 不再堆新的。
+ * 群消息就靠这个做成「「X」新消息」一条, 和微信/QQ 一样不会刷屏。
+ */
+function notify_merge(int $userId, string $title, string $content, string $type = 'social', string $link = ''): void
+{
+    if ($userId <= 0) return;
+    try {
+        $st = db()->prepare('SELECT id FROM notifications WHERE user_id = ? AND type = ? AND title = ? AND is_read = 0 ORDER BY id DESC LIMIT 1');
+        $st->execute([$userId, $type, $title]);
+        $id = (int)($st->fetchColumn() ?: 0);
+        if ($id > 0) {
+            db()->prepare('UPDATE notifications SET content = ?, link = ?, created_at = NOW() WHERE id = ?')
+                ->execute([$content, $link, $id]);
+        } else {
+            db()->prepare('INSERT INTO notifications (user_id, title, content, type, link, is_read) VALUES (?, ?, ?, ?, ?, 0)')
+                ->execute([$userId, $title, $content, $type, $link]);
+        }
+    } catch (Exception $e) {
+        error_log('[notify_merge] ' . $e->getMessage());
     }
 }
 
