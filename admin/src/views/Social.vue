@@ -169,6 +169,22 @@ async function loadGroups() {
   if (r.code === 0) groups.value = (r.data && r.data.list) || []
 }
 
+/**
+ * 发送人显示名 (手机端卡片标题用)。
+ *
+ * 注意: 模板里原来直接调用了 senderName(record), 但脚本里并没有定义这个函数 ——
+ * 手机端渲染到这一行就抛错, 整个卡片列表渲染不出来, 表现是「上边显示共 N 条,
+ * 下面一片空白, 连删除按钮都没有」。这里把函数补上。
+ */
+function senderName(record) {
+  const nick = String(record.nickname || '').trim()
+  const user = String(record.username || '').trim()
+  if (nick && user) return `${nick} (@${user})`
+  if (nick) return nick
+  if (user) return `@${user}`
+  return `用户 ${record.user_id || ''}`
+}
+
 /** 是否含 @: at_users 为逗号分隔 id 串或 JSON 数组, 空串 / '[]' / '0' 视为没有 */
 function hasAt(record) {
   const raw = record.at_users ?? record.at
