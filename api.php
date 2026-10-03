@@ -306,12 +306,16 @@ try {
             $me = current_user_or_401();
             if (empty($_FILES['file'])) json_error('未收到文件');
             $file = $_FILES['file'];
-            $ext = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
-            if (!in_array($ext, ['jpg', 'jpeg', 'png', 'gif', 'webp'])) json_error('只支持 jpg / png / gif / webp 图片');
-            if ($file['size'] > 10 * 1024 * 1024) json_error('头像不能超过 10MB');
+            if ((int)($file['size'] ?? 0) > 10 * 1024 * 1024) json_error('头像不能超过 10MB');
             $raw = @file_get_contents($file['tmp_name']);
             if ($raw === false || $raw === '') json_error('读取文件失败');
-            if (!@getimagesizefromstring($raw)) json_error('这不是一张有效的图片');
+            $info = @getimagesizefromstring($raw);
+            if (!$info) json_error('这不是一张有效的图片');
+            // 以真实图片内容推断扩展名: 相册选图 (Android GetContent) 的文件名常常没有扩展名
+            $mimeMap = ['image/jpeg' => 'jpg', 'image/png' => 'png', 'image/gif' => 'gif', 'image/webp' => 'webp'];
+            $realMime = strtolower((string)($info['mime'] ?? ''));
+            if (!isset($mimeMap[$realMime])) json_error('只支持 jpg / png / gif / webp 图片');
+            $ext = $mimeMap[$realMime];
             $raw = compress_image($raw, $ext, 512, 90);
             $mime = in_array($ext, ['jpg', 'jpeg']) ? 'image/jpeg'
                 : ($ext === 'png' ? 'image/png' : ($ext === 'webp' ? 'image/webp' : 'image/gif'));
@@ -1361,7 +1365,10 @@ function insert_app(): int
 /** 参数是否被提交过 (用于「留空不改」类更新) */
 function has_param(string $key): bool
 {
-    return array_key_exists($key, $_POST) || array_key_exists($key, $_GET);
+    // 客户端用 JSON body 提交 (ApiClient.request), 必须一并检查, 否则 user_update 会误判为"没有需要更新的内容"
+    return array_key_exists($key, request_body())
+        || array_key_exists($key, $_POST)
+        || array_key_exists($key, $_GET);
 }
 
 /** 当前登录用户完整行 (未登录返回 null; 兼容 sessions 表与旧 users.token) */
