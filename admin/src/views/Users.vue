@@ -79,6 +79,8 @@
               </div>
               <div class="m-card-actions">
                 <a-button type="text" size="small" @click="openUser(record)">编辑</a-button>
+                <a-button type="text" size="small" @click="openMute(record)">禁言</a-button>
+                <a-button type="text" status="success" size="small" @click="unmute(record)">解除禁言</a-button>
                 <a-button type="text" size="small" :status="Number(record.is_active) ? 'warning' : 'success'" @click="toggleActive(record)">
                   {{ Number(record.is_active) ? '禁用' : '启用' }}
                 </a-button>
@@ -102,7 +104,7 @@
         />
       </template>
       <template v-else>
-      <!-- 列宽合计 1292, 手机端由 tableScroll 兜底 >=720 -->
+      <!-- 列宽合计 1372, 手机端由 tableScroll 兜底 >=720 -->
       <a-table
         :data="list"
         row-key="id"
@@ -152,9 +154,11 @@
             </template>
           </a-table-column>
           <a-table-column title="注册时间" data-index="created_at" :width="180" />
-          <a-table-column title="操作" :width="200" fixed="right">
+          <a-table-column title="操作" :width="280" fixed="right">
             <template #cell="{ record }">
               <a-button type="text" size="small" @click="openUser(record)">编辑</a-button>
+              <a-button type="text" size="small" @click="openMute(record)">禁言</a-button>
+              <a-button type="text" status="success" size="small" @click="unmute(record)">解除禁言</a-button>
               <a-button type="text" size="small" :status="Number(record.is_active) ? 'warning' : 'success'" @click="toggleActive(record)">
                 {{ Number(record.is_active) ? '禁用' : '启用' }}
               </a-button>
@@ -228,6 +232,44 @@
         </div>
       </a-form>
     </a-modal>
+
+    <!-- 禁言弹窗: 全站禁言 (group_id 固定传 0) -->
+    <a-modal
+      v-model:visible="showMute"
+      title="禁言用户"
+      :width="modalWidth(480)"
+      :ok-loading="muting"
+      ok-text="确认禁言"
+      cancel-text="取消"
+      unmount-on-close
+      @ok="confirmMute"
+    >
+      <a-form :model="muteForm" layout="vertical">
+        <div class="mute-target">
+          被禁言用户：
+          <span class="mute-name">{{ muteForm.nickname || muteForm.username }}</span>
+          <span class="mute-id">(ID {{ muteForm.user_id }})</span>
+        </div>
+        <a-form-item label="禁言时长">
+          <a-radio-group v-model="muteForm.minutes">
+            <a-radio v-for="opt in muteOptions" :key="opt.value" :value="opt.value">
+              {{ opt.label }}
+            </a-radio>
+          </a-radio-group>
+        </a-form-item>
+        <a-form-item label="禁言原因 (可选, 最多 60 字)">
+          <a-input
+            v-model="muteForm.reason"
+            :max-length="60"
+            placeholder="可选，会展示给对方"
+            allow-clear
+          />
+        </a-form-item>
+        <div class="form-tip">
+          全站禁言：该用户在所有群组内均无法发言；「永久」需管理员手动解除。
+        </div>
+      </a-form>
+    </a-modal>
   </div>
 </template>
 
@@ -245,8 +287,8 @@ const kw = ref('')
 const filterRole = ref('')
 const filterActive = ref('')
 
-// 表格横向滚动宽度: 所有列宽合计 1292px (桌面按此宽度, 手机端至少 720px)
-const scrollX = tableScroll(1292)
+// 表格横向滚动宽度: 所有列宽合计 1372px (桌面按此宽度, 手机端至少 720px)
+const scrollX = tableScroll(1372)
 
 // 分页: 服务端分页, 桌面端表格与手机端卡片共用同一 pagination
 const pagination = ref({
@@ -276,6 +318,19 @@ const activeFilterOptions = [
 const showUser = ref(false)
 const emptyForm = () => ({ id: 0, username: '', password: '', nickname: '', email: '', bio: '', role: 'user', is_active: 1 })
 const userForm = ref(emptyForm())
+
+// 禁言: 全站禁言 (group_id 固定 0), minutes = 0 表示永久
+const showMute = ref(false)
+const muting = ref(false)
+const muteForm = ref({ user_id: 0, username: '', nickname: '', minutes: 60, reason: '' })
+const muteOptions = [
+  { label: '10 分钟', value: 10 },
+  { label: '1 小时', value: 60 },
+  { label: '1 天', value: 1440 },
+  { label: '7 天', value: 10080 },
+  { label: '30 天', value: 43200 },
+  { label: '永久', value: 0 },
+]
 
 /** 头像兜底: 昵称 > 用户名 > ? 的首字 */
 function initial(record) {
@@ -416,6 +471,54 @@ async function toggleActive(record) {
   load()
 }
 
+/** 打开禁言弹窗: 默认 1 小时, 原因清空 */
+function openMute(record) {
+  muteForm.value = {
+    user_id: Number(record.id) || 0,
+    username: record.username || '',
+    nickname: record.nickname || '',
+    minutes: 60,
+    reason: '',
+  }
+  showMute.value = true
+}
+
+/** 确认禁言: 全站禁言 (group_id = 0), minutes = 0 表示永久 */
+async function confirmMute() {
+  const f = muteForm.value
+  const reason = (f.reason || '').trim()
+  if (reason.length > 60) { Message.warning('禁言原因不能超过 60 个字'); return }
+  muting.value = true
+  try {
+    const r = await api('admin_user_mute', {
+      user_id: Number(f.user_id) || 0,
+      group_id: 0,
+      minutes: Number(f.minutes) || 0,
+      reason,
+    }, 'POST')
+    if (r.code !== 0) {
+      if (r.code !== 401) Message.error(r.msg || '禁言失败')
+      return
+    }
+    showMute.value = false
+    Message.success('已禁言')
+    load()
+  } finally {
+    muting.value = false
+  }
+}
+
+/** 解除全站禁言 (group_id = 0); removed = 0 表示本来就没被禁言 */
+async function unmute(record) {
+  const r = await api('admin_user_unmute', { user_id: Number(record.id) || 0, group_id: 0 }, 'POST')
+  if (r.code !== 0) {
+    if (r.code !== 401) Message.error(r.msg || '解除禁言失败')
+    return
+  }
+  Message.success(r.data && Number(r.data.removed) ? '已解除禁言' : '该用户当前未被禁言')
+  load()
+}
+
 /** 删除: 二次确认 (后端禁止删除自己 / 最后一个管理员) */
 function delUser(record) {
   Modal.warning({
@@ -448,6 +551,9 @@ onMounted(load)
 .toolbar-spacer { flex: 1 1 auto; min-width: 0; }
 
 .user-name { font-weight: 600; }
+.mute-target { margin-bottom: 14px; font-size: 13px; color: var(--color-text-2); }
+.mute-name { font-weight: 600; color: var(--color-text-1); }
+.mute-id { margin-left: 4px; color: var(--color-text-3); }
 .form-tip { font-size: 12px; color: var(--color-text-3); line-height: 1.6; margin-top: 4px; }
 .m-pager { justify-content: flex-end; margin-top: 12px; }
 
