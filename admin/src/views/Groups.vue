@@ -142,8 +142,21 @@
           <a-input v-model="form.name" :max-length="50" placeholder="例如: Aevum" allow-clear />
         </a-form-item>
 
-        <a-form-item field="icon" label="图标 URL">
-          <a-input v-model="form.icon" placeholder="https://... (可留空)" allow-clear />
+        <a-form-item field="icon" label="群组头像 (上传后自动存到对象存储)">
+          <div class="icon-upload">
+            <img v-if="iconPreview" class="icon-preview" :src="iconPreview" alt="" />
+            <div v-else class="icon-preview icon-preview-empty"><icon-image /></div>
+            <div class="icon-upload-side">
+              <input ref="iconInputRef" type="file" accept="image/*" class="icon-file-input" @change="onIconPick" />
+              <a-space>
+                <a-button size="small" :loading="iconUploading" @click="pickIcon">
+                  {{ iconPreview ? '更换图片' : '上传图片' }}
+                </a-button>
+                <a-button v-if="iconPreview" size="small" status="danger" @click="clearIcon">移除</a-button>
+              </a-space>
+              <div class="icon-tip">支持 jpg / png / gif / webp, 建议正方形, 保存时一并上传</div>
+            </div>
+          </div>
         </a-form-item>
 
         <a-form-item field="description" label="简介 (最多 100 字)">
@@ -192,7 +205,7 @@
 <script setup>
 import { onMounted, reactive, ref } from 'vue'
 import { Message, Modal } from '@arco-design/web-vue'
-import { api, pickList } from '../api'
+import { api, apiForm, pickList } from '../api'
 import { isMobile, modalWidth, tableScroll } from '../composables/useResponsive'
 
 // 表格横向滚动: 桌面按列宽总和 1210, 手机端至少 720
@@ -202,6 +215,12 @@ const list = ref([])
 const loading = ref(false)
 const saving = ref(false)
 const showGroup = ref(false)
+
+// 群组头像上传: 选中文件后本地预览, 保存时作为 icon_file 一起提交
+const iconInputRef = ref(null)
+const iconFile = ref(null)
+const iconPreview = ref('')
+const iconUploading = ref(false)
 
 const form = reactive({
   id: 0,
@@ -239,6 +258,8 @@ function openGroup(record) {
       sort_order: Number(record.sort_order) || 0,
       is_active: Number(record.is_active) ? 1 : 0,
     })
+    iconFile.value = null
+    iconPreview.value = record.icon || ''
   } else {
     Object.assign(form, {
       id: 0,
@@ -249,8 +270,40 @@ function openGroup(record) {
       sort_order: 0,
       is_active: 1,
     })
+    iconFile.value = null
+    iconPreview.value = ''
   }
   showGroup.value = true
+}
+
+/** 选择头像文件 (只本地预览, 保存时再上传) */
+function onIconPick(e) {
+  const f = e.target.files && e.target.files[0]
+  // 允许重复选中同一个文件
+  e.target.value = ''
+  if (!f) return
+  if (!/^image\//.test(f.type)) {
+    Message.warning('请选择图片文件')
+    return
+  }
+  if (f.size > 10 * 1024 * 1024) {
+    Message.warning('图片不能超过 10MB')
+    return
+  }
+  iconFile.value = f
+  const reader = new FileReader()
+  reader.onload = () => { iconPreview.value = String(reader.result || '') }
+  reader.readAsDataURL(f)
+}
+
+function pickIcon() {
+  iconInputRef.value && iconInputRef.value.click()
+}
+
+function clearIcon() {
+  iconFile.value = null
+  iconPreview.value = ''
+  form.icon = ''
 }
 
 function onActiveChange(v) {
@@ -264,24 +317,35 @@ async function save() {
   }
   saving.value = true
   try {
-    const r = await api('admin_group_save', {
+    const fields = {
       id: Number(form.id) || 0,
       name: form.name.trim(),
-      icon: form.icon || '',
       description: form.description || '',
       notice: form.notice || '',
       sort_order: Number(form.sort_order) || 0,
       is_active: Number(form.is_active) ? 1 : 0,
-    }, 'POST')
+    }
+    let r
+    if (iconFile.value) {
+      // 带图片上传 -> FormData (服务端压缩后传对象存储, 返回 icon URL)
+      iconUploading.value = true
+      fields.icon_file = iconFile.value
+      r = await apiForm('admin_group_save', fields)
+    } else {
+      fields.icon = form.icon || ''
+      r = await api('admin_group_save', fields, 'POST')
+    }
     if (r.code !== 0) {
       if (r.code !== 401) Message.error('保存失败: ' + (r.msg || '未知错误'))
       return
     }
     showGroup.value = false
+    iconFile.value = null
     Message.success(form.id ? '保存成功' : '新建成功')
     load()
   } finally {
     saving.value = false
+    iconUploading.value = false
   }
 }
 
@@ -331,6 +395,42 @@ onMounted(load)
 </script>
 
 <style scoped>
+/* ===== 群组头像上传 ===== */
+.icon-upload {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.icon-file-input {
+  display: none;
+}
+.icon-preview {
+  width: 72px;
+  height: 72px;
+  border-radius: 16px;
+  object-fit: cover;
+  border: 1px solid var(--color-border-2);
+  background: var(--color-fill-2);
+  flex: 0 0 auto;
+}
+.icon-preview-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 26px;
+  color: var(--color-text-3);
+}
+.icon-upload-side {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.icon-tip {
+  font-size: 12px;
+  color: var(--color-text-3);
+  line-height: 1.5;
+}
+
 .page-toolbar {
   display: flex;
   align-items: center;

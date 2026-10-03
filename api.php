@@ -41,6 +41,9 @@ define('S3_BUCKET', 'fenglin');
 define('S3_REGION', 'cn-nb1');
 define('S3_ACCESS_KEY', 'qLvix4DJFzd4DS1n');
 define('S3_SECRET_KEY', 'ENhWei361GTC752TsoayUlhcb7svyn');
+// 图形验证码使用的 TrueType 字体 (找不到时自动退回内置字体)
+if (!defined('CAPTCHA_FONT')) define('CAPTCHA_FONT', '/usr/share/fonts/truetype/lato/Lato-Bold.ttf');
+
 define('S3_PUBLIC_URL', 'https://fenglin.cn-nb1.rains3.com'); // 公共读地址
 
 /** HMAC-SHA256 辅助 */
@@ -718,6 +721,21 @@ try {
             if ($name === '') json_error('群组名称不能为空');
             if (mb_strlen($name) > 20) json_error('群组名称不能超过 20 个字');
             $icon = trim((string)param('icon', ''));
+            // 群组头像上传: 表单带 icon_file 文件时优先, 压缩到 256 宽后传对象存储
+            if (isset($_FILES['icon_file']) && is_array($_FILES['icon_file']) && (int)($_FILES['icon_file']['error'] ?? 4) === 0) {
+                $rawIcon = @file_get_contents((string)($_FILES['icon_file']['tmp_name'] ?? ''));
+                if ($rawIcon === false || $rawIcon === '') json_error('头像文件读取失败, 请重试');
+                $infoIcon = @getimagesizefromstring($rawIcon);
+                if (!$infoIcon || empty($infoIcon['mime'])) json_error('这不是一张有效的图片');
+                $mimeIcon = strtolower((string)$infoIcon['mime']);
+                $extMapIcon = ['image/jpeg' => 'jpg', 'image/png' => 'png', 'image/gif' => 'gif', 'image/webp' => 'webp'];
+                if (!isset($extMapIcon[$mimeIcon])) json_error('只支持 jpg / png / gif / webp 图片');
+                $extIcon = $extMapIcon[$mimeIcon];
+                $dataIcon = compress_image($rawIcon, $extIcon, 256, 88);
+                $keyIcon = s3_key('group_icons', $extIcon);
+                if (!s3_upload_bytes($dataIcon, $keyIcon, $mimeIcon)) json_error('头像上传失败, 请稍后重试');
+                $icon = S3_PUBLIC_URL . '/' . $keyIcon;
+            }
             $desc = trim((string)param('description', ''));
             if (mb_strlen($desc) > 100) json_error('简介不能超过 100 个字');
             $sort = (int)param('sort_order', 0);
@@ -1845,23 +1863,39 @@ function captcha_generate(): array
 /** 画一张 4 位验证码 PNG, 返回 data:image/png;base64,... */
 function captcha_image(string $code): string
 {
-    $w = 132;
-    $h = 46;
+    // 2026-10-04 用户反馈「验证码太小看不清」: 由 132x46 放大到 280x100,
+    // 并用 TrueType 字体 (34px) 绘制字符, 手机上可清晰辨认。
+    $w = 280;
+    $h = 100;
     $im = imagecreatetruecolor($w, $h);
     $bg = imagecolorallocate($im, 246, 247, 251);
     imagefilledrectangle($im, 0, 0, $w, $h, $bg);
-    for ($i = 0; $i < 6; $i++) {
-        $c = imagecolorallocate($im, random_int(185, 225), random_int(185, 225), random_int(205, 240));
-        imageline($im, random_int(0, $w), random_int(0, $h), random_int(0, $w), random_int(0, $h), $c);
+    // 干扰曲线 (浅色, 不遮挡字符)
+    for ($i = 0; $i < 5; $i++) {
+        $c = imagecolorallocate($im, random_int(200, 232), random_int(200, 232), random_int(215, 245));
+        imagearc($im, random_int(0, $w), random_int(0, $h), random_int(80, 240), random_int(50, 130), 0, 360, $c);
     }
-    for ($i = 0; $i < 70; $i++) {
-        $c = imagecolorallocate($im, random_int(150, 230), random_int(150, 230), random_int(150, 230));
+    for ($i = 0; $i < 140; $i++) {
+        $c = imagecolorallocate($im, random_int(170, 235), random_int(170, 235), random_int(170, 235));
         imagesetpixel($im, random_int(0, $w - 1), random_int(0, $h - 1), $c);
     }
-    $len = strlen($code);
+    $len = max(1, strlen($code));
+    $step = (int)(($w - 56) / $len);
     for ($i = 0; $i < $len; $i++) {
-        $c = imagecolorallocate($im, random_int(25, 105), random_int(25, 105), random_int(115, 195));
-        imagestring($im, 5, 14 + $i * 27, random_int(13, 24), $code[$i], $c);
+        // 深色字符, 与浅色背景/干扰形成强对比
+        $c = imagecolorallocate($im, random_int(15, 80), random_int(15, 80), random_int(105, 185));
+        $x = 26 + $i * $step;
+        $y = random_int(62, 76);
+        if (function_exists('imagettftext') && is_file(CAPTCHA_FONT)) {
+            imagettftext($im, 34, random_int(-12, 12), $x, $y, $c, CAPTCHA_FONT, $code[$i]);
+        } else {
+            // 兜底: 无 TTF 时用内置字体并整体放大两倍
+            imagestring($im, 5, (int)($x / 2), (int)($y / 2), $code[$i], $c);
+        }
+    }
+    if (!function_exists('imagettftext') || !is_file(CAPTCHA_FONT)) {
+        $big = imagescale($im, $w, $h);
+        if ($big !== false) { imagedestroy($im); $im = $big; }
     }
     ob_start();
     imagepng($im);
