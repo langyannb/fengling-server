@@ -642,6 +642,28 @@ try {
             }
             json_out(['list' => array_map('social_msg_public', $rows), 'has_more' => count($rows) >= $limit]);
 
+        case 'social_image_upload':
+            // 群聊图片: 先上传拿到对象存储地址, 再带着这个地址调 social_send 发消息
+            $me = current_user_or_401();
+            if ((int)$me['is_active'] !== 1) json_error('你已被封禁', 403);
+            if (empty($_FILES['file'])) json_error('未收到文件');
+            $file = $_FILES['file'];
+            if ((int)($file['size'] ?? 0) > 10 * 1024 * 1024) json_error('图片不能超过 10MB');
+            $raw = @file_get_contents($file['tmp_name']);
+            if ($raw === false || $raw === '') json_error('读取文件失败');
+            $info = @getimagesizefromstring($raw);
+            if (!$info) json_error('这不是一张有效的图片');
+            $mimeMap = ['image/jpeg' => 'jpg', 'image/png' => 'png', 'image/webp' => 'webp'];
+            $realMime = strtolower((string)($info['mime'] ?? ''));
+            if (!isset($mimeMap[$realMime])) json_error('只支持 jpg / png / webp 图片');
+            $ext = $mimeMap[$realMime];
+            $w = (int)$info[0]; $h = (int)$info[1];
+            $raw = compress_image($raw, $ext, 1600, 82);
+            $mime = $ext === 'jpg' ? 'image/jpeg' : ($ext === 'png' ? 'image/png' : 'image/webp');
+            $key = s3_key('chat', $ext);
+            if (!s3_upload_bytes($raw, $key, $mime)) json_error('上传失败, 请稍后重试');
+            json_out(['url' => S3_PUBLIC_URL . '/' . $key, 'width' => $w, 'height' => $h]);
+
         case 'social_send':
             $me = current_user_or_401();
             if ((int)$me['is_active'] !== 1) json_error('你已被封禁', 403);
@@ -658,8 +680,14 @@ try {
                 }
             }
             $content = trim((string)param('content', ''));
-            if ($content === '') json_error('消息内容不能为空');
+            $image = trim((string)param('image', ''));
+            if ($image !== '' && strpos($image, S3_PUBLIC_URL . '/chat/') !== 0) json_error('图片地址不合法');
+            $imgW = max(0, (int)param('image_w', 0));
+            $imgH = max(0, (int)param('image_h', 0));
+            if ($content === '' && $image === '') json_error('消息内容不能为空');
             if (mb_strlen($content) > 500) json_error('消息不能超过 500 个字');
+            // 图片消息在通知里统一显示 [图片]
+            $notifyText = $content !== '' ? mb_substr($content, 0, 80) : '[图片]';
             $st = db()->prepare('SELECT created_at FROM social_messages WHERE user_id = ? AND group_id = ? ORDER BY id DESC LIMIT 1');
             $st->execute([(int)$me['id'], $gid]);
             $last = $st->fetchColumn();
@@ -684,14 +712,14 @@ try {
                 $st->execute([$quoteId, $gid]);
                 if (!$st->fetchColumn()) $quoteId = 0;
             }
-            db()->prepare('INSERT INTO social_messages (group_id, user_id, content, at_users, quote_id, is_recalled) VALUES (?, ?, ?, ?, ?, 0)')
-                ->execute([$gid, (int)$me['id'], $content, implode(',', $atStore), $quoteId]);
+            db()->prepare('INSERT INTO social_messages (group_id, user_id, content, image, image_w, image_h, at_users, quote_id, is_recalled) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)')
+                ->execute([$gid, (int)$me['id'], $content, $image, $imgW, $imgH, implode(',', $atStore), $quoteId]);
             $mid = (int)db()->lastInsertId();
             if ($atAll) {
                 $st = db()->prepare('SELECT id FROM users WHERE is_active = 1 AND id <> ?');
                 $st->execute([(int)$me['id']]);
                 foreach ($st->fetchAll() as $t) {
-                    notify_push((int)$t['id'], '「' . $g['name'] . '」有人 @了所有人', mb_substr($content, 0, 80), 'social');
+                    notify_push((int)$t['id'], '「' . $g['name'] . '」有人 @了所有人', $notifyText, 'social');
                 }
             } elseif ($at) {
                 $in = implode(',', array_fill(0, count($at), '?'));
@@ -699,7 +727,7 @@ try {
                 $st->execute($at);
                 foreach ($st->fetchAll() as $t) {
                     // link 里带上群 id 与消息 id, 客户端点通知能直接跳进群并定位到这条消息
-                    notify_push((int)$t['id'], '有人在「' . $g['name'] . '」@了你', mb_substr($content, 0, 80), 'social', 'msg:' . $gid . ':' . $mid);
+                    notify_push((int)$t['id'], '有人在「' . $g['name'] . '」@了你', $notifyText, 'social', 'msg:' . $gid . ':' . $mid);
                 }
             }
             // 普通群消息提醒: 给群内其他成员推一条「「X」新消息」(同一未读合并, 不刷屏)。
@@ -710,7 +738,7 @@ try {
                 foreach ($at as $aid) { $atSet[(int)$aid] = true; }
                 $mutedIds = mute_user_ids($gid);
                 $senderName = (string)(($me['nickname'] ?? '') !== '' ? $me['nickname'] : ($me['username'] ?? ''));
-                $brief = mb_substr($content, 0, 60);
+                $brief = $content !== '' ? mb_substr($content, 0, 60) : '[图片]';
                 $st = db()->prepare('SELECT id FROM users WHERE is_active = 1 AND id <> ?');
                 $st->execute([(int)$me['id']]);
                 foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $uid) {
@@ -2181,6 +2209,9 @@ function social_msg_public(array $m): array
         'avatar'      => (string)($m['avatar'] ?? ''),
         'role'        => (string)($m['role'] ?? 'user'),
         'content'     => $recalled ? '' : (string)$m['content'],
+        'image'       => $recalled ? '' : (string)($m['image'] ?? ''),
+        'image_w'     => $recalled ? 0 : (int)($m['image_w'] ?? 0),
+        'image_h'     => $recalled ? 0 : (int)($m['image_h'] ?? 0),
         'at'          => $at,
         'quote_id'      => (int)($m['quote_id'] ?? 0),
         'quote_nickname' => $recalled ? '' : (string)($m['quote_nickname'] ?? ''),

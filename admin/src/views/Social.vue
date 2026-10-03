@@ -48,7 +48,13 @@
               <span class="m-card-label">内容</span>
               <span class="m-card-value">
                 <span v-if="Number(record.is_recalled)" class="recalled">已撤回</span>
-                <span v-else class="msg-content">{{ record.content || '-' }}</span>
+                <span v-else class="msg-content">{{ record.content || (record.image ? '[图片]' : '-') }}</span>
+              </span>
+            </div>
+            <div v-if="record.image" class="m-card-row">
+              <span class="m-card-label">图片</span>
+              <span class="m-card-value">
+                <a-image :src="record.image" :width="56" class="msg-thumb" />
               </span>
             </div>
             <div class="m-card-row">
@@ -78,7 +84,7 @@
     </template>
 
     <!-- ===== 桌面端: 表格 ===== -->
-    <!-- 横向总宽: 80+130+180+330+90+170+100 = 1080 -->
+    <!-- 横向总宽: 80+130+180+330+90+90+170+100 = 1170 -->
     <a-table
       v-else
       :data="list"
@@ -106,7 +112,13 @@
         <a-table-column title="内容" :width="330">
           <template #cell="{ record }">
             <span v-if="Number(record.is_recalled)" class="recalled">已撤回</span>
-            <span v-else class="msg-content">{{ record.content || '-' }}</span>
+            <span v-else class="msg-content">{{ record.content || (record.image ? '[图片]' : '-') }}</span>
+          </template>
+        </a-table-column>
+        <a-table-column title="图片" :width="90">
+          <template #cell="{ record }">
+            <a-image v-if="record.image" :src="record.image" :width="48" class="msg-thumb" />
+            <span v-else class="muted">-</span>
           </template>
         </a-table-column>
         <a-table-column title="是否含 @" :width="90">
@@ -134,7 +146,7 @@ import { api } from '../api'
 import { isMobile, tableScroll } from '../composables/useResponsive'
 
 // 表格横向滚动: 桌面按列宽总和 1080, 手机端至少 720
-const scrollX = tableScroll(1080)
+const scrollX = tableScroll(1170)
 
 const list = ref([])
 const total = ref(0)
@@ -286,6 +298,8 @@ onMounted(() => {
 /* 撤回的消息统一灰色显示 */
 .recalled { color: var(--color-text-3); font-size: 13px; }
 .msg-content { word-break: break-word; }
+/* 群消息图片缩略图 (点开可放大) */
+.msg-thumb { border-radius: 6px; overflow: hidden; cursor: zoom-in; }
 
 @media (max-width: 820px) {
   .page-toolbar { flex-direction: column; align-items: stretch; }
