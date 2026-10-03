@@ -262,6 +262,9 @@ try {
                 ->execute([$username, password_hash($password, PASSWORD_DEFAULT), $nickname, $emailVal]);
             $uid = (int)db()->lastInsertId();
             $token = make_token();
+            // 注册即登录: token 必须落库, 否则返回的 token 是孤儿, 后续鉴权全部 401
+            db()->prepare('UPDATE users SET token = ? WHERE id = ?')->execute([$token, $uid]);
+            try { db()->prepare('INSERT INTO sessions (user_id, token) VALUES (?, ?)')->execute([$uid, $token]); } catch (Exception $e) {}
             $st = db()->prepare('SELECT * FROM users WHERE id = ?');
             $st->execute([$uid]);
             $newUser = $st->fetch();
@@ -495,9 +498,11 @@ try {
             $categoryId = (int)param('category_id', 0);
             $keyword = param('keyword', '');
             $packId = param('pack_id', null);
+            // 后台管理需要看到已下架软件 (前端传 include_inactive=1 且必须为管理员); 访客强制只看上架的
+            $includeInactive = (int)param('include_inactive', 0) === 1 && is_admin();
             $sql = 'SELECT a.*, c.name AS category_name, c.color AS category_color FROM apps a
                     LEFT JOIN categories c ON a.category_id = c.id
-                    WHERE a.is_active = 1';
+                    WHERE ' . ($includeInactive ? '1 = 1' : 'a.is_active = 1');
             $args = [];
             if ($packId !== null) {
                 // 整合包子项: pack_id = 父 id
@@ -541,9 +546,11 @@ try {
 
         case 'app_detail':
             $id = (int)param('id', 0);
+            // 管理员可查看已下架软件详情 (后台编辑需要), 访客只看上架的
+            $inactiveCond = ((int)param('include_inactive', 0) === 1 && is_admin()) ? '' : ' AND a.is_active = 1';
             $stmt = db()->prepare('SELECT a.*, c.name AS category_name FROM apps a
                                    LEFT JOIN categories c ON a.category_id = c.id
-                                   WHERE a.id = ? AND a.is_active = 1');
+                                   WHERE a.id = ?' . $inactiveCond);
             $stmt->execute([$id]);
             $app = $stmt->fetch();
             if (!$app) json_error('软件不存在');
