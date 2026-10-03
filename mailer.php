@@ -91,7 +91,7 @@ class Mailer
     /** 验证码邮件 (purpose: register | reset) */
     public static function sendCode(string $to, string $code, string $purpose = 'register'): bool
     {
-        $title = $purpose === 'reset' ? '重置密码' : '注册账号';
+        $title = $purpose === 'reset' ? '重置密码' : ($purpose === 'verify' ? '验证邮箱' : '注册账号');
         $html = '<div style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;max-width:480px;margin:0 auto;padding:24px;">'
             . '<h2 style="color:#4C6FFF;margin:0 0 8px;">风铃分享库</h2>'
             . '<p style="color:#666;margin:0 0 24px;">你正在' . $title . '，验证码 5 分钟内有效。</p>'

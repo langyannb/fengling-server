@@ -182,12 +182,13 @@ try {
             $username = trim(param('username', ''));
             $password = param('password', '');
             if (!$username || !$password) json_error('用户名和密码不能为空');
-            $stmt = db()->prepare("SELECT * FROM users WHERE (username = ? OR (email <> '' AND email = ?)) AND is_active = 1");
+            $stmt = db()->prepare("SELECT * FROM users WHERE username = ? OR (email <> '' AND email = ?)");
             $stmt->execute([$username, $username]);
             $user = $stmt->fetch();
             if (!$user || !password_verify($password, $user['password'])) {
                 json_error('用户名或密码错误');
             }
+            if ((int)$user['is_active'] !== 1) json_error('账号已被封禁, 请联系管理员', 403);
             $token = make_token();
             // 多会话: 每个登录会话独立 token, 不覆盖 users.token (多设备登录互不顶掉)
             db()->prepare('UPDATE users SET token = ? WHERE id = ?')->execute([$token, $user['id']]);
@@ -203,6 +204,9 @@ try {
         case 'send_code':
             $email   = trim((string)param('email', ''));
             $purpose = param('purpose', 'register') === 'reset' ? 'reset' : 'register';
+            if (!captcha_check((string)param('captcha_token', ''), (string)param('captcha_code', ''))) {
+                json_error('图形验证码错误或已过期');
+            }
             if (!filter_var($email, FILTER_VALIDATE_EMAIL)) json_error('邮箱格式不正确');
             $st = db()->prepare('SELECT id FROM users WHERE email = ?');
             $st->execute([$email]);
@@ -375,9 +379,10 @@ try {
             $bio      = trim((string)param('bio', ''));
             $role     = param('role', 'user') === 'admin' ? 'admin' : 'user';
             $active   = (int)param('is_active', 1) ? 1 : 0;
-            if (!preg_match('/^[A-Za-z0-9_]{3,20}$/', $username)) json_error('用户名只能包含字母数字下划线(3-20位)');
+            // username 为空 = 未提交该字段 (仅改 is_active 等), 留到 id>0 分支沿用原值后再校验
+            if ($username !== '' && !preg_match('/^[A-Za-z0-9_]{3,20}$/', $username)) json_error('用户名只能包含字母数字下划线(3-20位)');
             if ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) json_error('邮箱格式不正确');
-            if ($nickname === '') $nickname = $username;
+            if ($nickname === '' && $username !== '') $nickname = $username;
             if (mb_strlen($nickname) > 20) json_error('昵称不能超过 20 个字');
             if (mb_strlen($bio) > 100) json_error('简介不能超过 100 个字');
             $st = db()->prepare('SELECT id FROM users WHERE username = ? AND id <> ?');
@@ -395,6 +400,16 @@ try {
                 if (!$old) json_error('用户不存在');
                 if ((int)$self['id'] === $id && ($role !== 'admin' || $active === 0)) {
                     json_error('不能修改自己的角色, 也不能禁用自己的账号');
+                }
+                // 未提交的字段沿用原值, 便于只传 id + is_active 做封禁/解封
+                if ($username === '') $username = (string)$old['username'];
+                if ($nickname === '') $nickname = (string)$old['nickname'];
+                if ($email === '') $email = (string)($old['email'] ?? '');
+                if ($bio === '') $bio = (string)($old['bio'] ?? '');
+                if (!has_param('role')) $role = (string)$old['role'];
+                if (!has_param('is_active')) $active = (int)$old['is_active'] ? 1 : 0;
+                if ($username === '' || !preg_match('/^[A-Za-z0-9_]{3,20}$/', $username)) {
+                    json_error('用户名只能包含字母数字下划线(3-20位)');
                 }
                 $emailVal = $email === '' ? null : $email;
                 $fields = ['username = ?', 'nickname = ?', 'email = ?', 'role = ?', 'is_active = ?', 'bio = ?'];
@@ -438,6 +453,340 @@ try {
             db()->prepare('DELETE FROM sessions WHERE user_id = ?')->execute([$id]);
             db()->prepare('DELETE FROM users WHERE id = ?')->execute([$id]);
             json_out(null);
+
+        // ============ 图形验证码 ============
+        // 4 位字母数字, 180 秒有效, 一次性; 返回 data:image/png;base64 直接可塞进 img
+        case 'captcha':
+            $cap = captcha_generate();
+            json_out(['token' => $cap[0], 'image' => captcha_image($cap[1]), 'expires_in' => 180]);
+
+        // ============ 邮箱验证 (已登录用户给自己邮箱验证) ============
+        case 'email_verify_send':
+            $me = current_user_or_401();
+            if (!captcha_check((string)param('captcha_token', ''), (string)param('captcha_code', ''))) {
+                json_error('图形验证码错误或已过期');
+            }
+            $email = trim((string)param('email', ''));
+            if ($email === '') $email = trim((string)($me['email'] ?? ''));
+            if (!filter_var($email, FILTER_VALIDATE_EMAIL)) json_error('邮箱格式不正确');
+            $st = db()->prepare('SELECT id FROM users WHERE email = ? AND id <> ?');
+            $st->execute([$email, $me['id']]);
+            if ($st->fetch()) json_error('该邮箱已被其他账号使用');
+            $st = db()->prepare("SELECT created_at FROM email_codes WHERE email = ? AND purpose = 'verify' ORDER BY id DESC LIMIT 1");
+            $st->execute([$email]);
+            $last = $st->fetchColumn();
+            if ($last && time() - strtotime($last) < 60) json_error('发送太频繁, 请 60 秒后再试');
+            $ip = client_ip();
+            $st = db()->prepare('SELECT COUNT(*) FROM email_codes WHERE ip = ? AND created_at > DATE_SUB(NOW(), INTERVAL 1 HOUR)');
+            $st->execute([$ip]);
+            if ((int)$st->fetchColumn() >= 20) json_error('操作过于频繁, 请稍后再试');
+            $code = str_pad((string)random_int(0, 999999), 6, '0', STR_PAD_LEFT);
+            db()->prepare('INSERT INTO email_codes (email, code, purpose, ip, expires_at) VALUES (?, ?, ?, ?, DATE_ADD(NOW(), INTERVAL 5 MINUTE))')
+                ->execute([$email, $code, 'verify', $ip]);
+            if (!Mailer::sendCode($email, $code, 'verify')) {
+                error_log('[email_verify_send] 邮件发送失败: ' . $email);
+                json_error('邮件发送失败, 请稍后重试');
+            }
+            json_out(['ok' => true, 'email' => $email, 'expires_in' => 300]);
+
+        case 'email_verify':
+            $me = current_user_or_401();
+            $email = trim((string)param('email', ''));
+            $code  = trim((string)param('code', ''));
+            if (!filter_var($email, FILTER_VALIDATE_EMAIL)) json_error('邮箱格式不正确');
+            if ($code === '') json_error('请输入验证码');
+            $st = db()->prepare("SELECT id, code, tries FROM email_codes WHERE email = ? AND purpose = 'verify' AND used = 0 AND expires_at > NOW() ORDER BY id DESC LIMIT 1");
+            $st->execute([$email]);
+            $row = $st->fetch();
+            if (!$row) json_error('验证码错误或已过期');
+            if ((int)$row['tries'] >= 5) json_error('验证码错误次数过多, 请重新获取');
+            if (!hash_equals((string)$row['code'], $code)) {
+                db()->prepare('UPDATE email_codes SET tries = tries + 1 WHERE id = ?')->execute([$row['id']]);
+                json_error('验证码错误或已过期');
+            }
+            db()->prepare('UPDATE email_codes SET used = 1 WHERE id = ?')->execute([$row['id']]);
+            $st = db()->prepare('SELECT id FROM users WHERE email = ? AND id <> ?');
+            $st->execute([$email, $me['id']]);
+            if ($st->fetch()) json_error('该邮箱已被其他账号使用');
+            db()->prepare('UPDATE users SET email = ?, email_verified = 1 WHERE id = ?')->execute([$email, $me['id']]);
+            notify_push((int)$me['id'], '邮箱验证成功', '你的邮箱 ' . $email . ' 已验证成功, 可用于找回密码。', 'system');
+            $st = db()->prepare('SELECT * FROM users WHERE id = ?');
+            $st->execute([$me['id']]);
+            json_out(['user' => user_public($st->fetch())]);
+
+        // ============ 社交群组 ============
+        case 'social_groups':
+            $rows = db()->query("SELECT g.*,
+                    (SELECT COUNT(DISTINCT m.user_id) FROM social_messages m WHERE m.group_id = g.id) AS member_count,
+                    (SELECT COUNT(*) FROM social_messages m WHERE m.group_id = g.id AND m.is_recalled = 0) AS message_count
+                FROM social_groups g WHERE g.is_active = 1 ORDER BY g.sort_order ASC, g.id ASC")->fetchAll();
+            json_out(['list' => array_map('social_group_public', $rows)]);
+
+        case 'social_group':
+            $gid = (int)param('id', 0);
+            $g = social_group_or_404($gid, false);
+            $st = db()->prepare("SELECT DISTINCT u.id, u.nickname, u.username FROM social_messages m INNER JOIN users u ON u.id = m.user_id WHERE m.group_id = ? AND u.role = 'admin'");
+            $st->execute([$gid]);
+            $st2 = db()->query("SELECT COUNT(DISTINCT user_id) AS c FROM social_messages WHERE group_id = " . $gid);
+            $g['member_count'] = (int)($st2->fetch()['c'] ?? 0);
+            json_out(['group' => social_group_public($g), 'notice' => (string)($g['notice'] ?? ''), 'admins' => $st->fetchAll()]);
+
+        case 'social_messages':
+            $me = current_user_or_401();
+            $gid = (int)param('group_id', 0);
+            $after = (int)param('after_id', 0);
+            $limit = min(50, max(1, (int)param('limit', 30)));
+            social_group_or_404($gid, false);
+            $sql = "SELECT m.*, u.nickname, u.username, u.avatar, u.role
+                    FROM social_messages m LEFT JOIN users u ON u.id = m.user_id
+                    WHERE m.group_id = ?";
+            if ($after > 0) {
+                $st = db()->prepare($sql . ' AND m.id > ? ORDER BY m.id ASC LIMIT ' . $limit);
+                $st->execute([$gid, $after]);
+                $rows = $st->fetchAll();
+            } else {
+                $st = db()->prepare($sql . ' ORDER BY m.id DESC LIMIT ' . $limit);
+                $st->execute([$gid]);
+                $rows = array_reverse($st->fetchAll());
+            }
+            if ($rows) {
+                $ids = [];
+                foreach ($rows as $r) { $ids[] = (int)$r['user_id']; }
+                $names = [];
+                $in = implode(',', array_fill(0, count($ids), '?'));
+                $st = db()->prepare('SELECT id, nickname, username FROM users WHERE id IN (' . $in . ')');
+                $st->execute(array_values(array_unique($ids)));
+                foreach ($st->fetchAll() as $u2) {
+                    $names[(int)$u2['id']] = $u2['nickname'] !== '' ? $u2['nickname'] : $u2['username'];
+                }
+                foreach ($rows as $i => $r) { $rows[$i]['at_names'] = $names; }
+            }
+            json_out(['list' => array_map('social_msg_public', $rows), 'has_more' => count($rows) >= $limit]);
+
+        case 'social_send':
+            $me = current_user_or_401();
+            if ((int)$me['is_active'] !== 1) json_error('你已被封禁', 403);
+            $gid = (int)param('group_id', 0);
+            $g = social_group_or_404($gid, false);
+            $content = trim((string)param('content', ''));
+            if ($content === '') json_error('消息内容不能为空');
+            if (mb_strlen($content) > 500) json_error('消息不能超过 500 个字');
+            $st = db()->prepare('SELECT created_at FROM social_messages WHERE user_id = ? AND group_id = ? ORDER BY id DESC LIMIT 1');
+            $st->execute([(int)$me['id'], $gid]);
+            $last = $st->fetchColumn();
+            if ($last && strtotime($last) > time() - 2) json_error('发送太快了, 请稍后再试');
+            $at = param('at', []);
+            if (is_string($at)) $at = preg_split('/[,\s]+/', $at);
+            if (!is_array($at)) $at = [];
+            $at = array_values(array_unique(array_filter(array_map('intval', $at), function ($v) use ($me) {
+                return $v > 0 && $v !== (int)$me['id'];
+            })));
+            db()->prepare('INSERT INTO social_messages (group_id, user_id, content, at_users, is_recalled) VALUES (?, ?, ?, ?, 0)')
+                ->execute([$gid, (int)$me['id'], $content, implode(',', $at)]);
+            $mid = (int)db()->lastInsertId();
+            if ($at) {
+                $in = implode(',', array_fill(0, count($at), '?'));
+                $st = db()->prepare('SELECT id FROM users WHERE id IN (' . $in . ') AND is_active = 1');
+                $st->execute($at);
+                foreach ($st->fetchAll() as $t) {
+                    notify_push((int)$t['id'], '有人在「' . $g['name'] . '」@了你', mb_substr($content, 0, 80), 'social');
+                }
+            }
+            json_out(['id' => $mid, 'created_at' => date('Y-m-d H:i:s')]);
+
+        case 'social_recall':
+            $me = current_user_or_401();
+            $id = (int)param('id', 0);
+            $st = db()->prepare('SELECT * FROM social_messages WHERE id = ?');
+            $st->execute([$id]);
+            $m = $st->fetch();
+            if (!$m) json_error('消息不存在');
+            if ((int)$m['is_recalled'] === 1) json_error('消息已经撤回了');
+            $isAdmin = ($me['role'] ?? '') === 'admin';
+            $mine = (int)$m['user_id'] === (int)$me['id'];
+            if (!$isAdmin && !$mine) json_error('没有权限撤回这条消息', 403);
+            if (!$isAdmin && strtotime($m['created_at']) < time() - 300) json_error('只能撤回 5 分钟内的消息');
+            db()->prepare('UPDATE social_messages SET is_recalled = 1, recalled_by = ?, recalled_at = NOW() WHERE id = ?')
+                ->execute([(int)$me['id'], $id]);
+            json_out(['ok' => true]);
+
+        case 'social_group_notice_set':
+            require_admin();
+            $gid = (int)param('group_id', 0);
+            $g = social_group_or_404($gid, true);
+            $notice = trim((string)param('notice', ''));
+            if (mb_strlen($notice) > 500) json_error('公告不能超过 500 个字');
+            db()->prepare('UPDATE social_groups SET notice = ? WHERE id = ?')->execute([$notice, $gid]);
+            json_out(['ok' => true]);
+
+        // ============ 消息通知 ============
+        case 'notifications':
+            $me = current_user_or_401();
+            $page = max(1, (int)param('page', 1));
+            $ps = min(50, max(1, (int)param('page_size', 20)));
+            $unreadOnly = (int)param('unread_only', 0) === 1;
+            $cond = 'user_id = ?' . ($unreadOnly ? ' AND is_read = 0' : '');
+            $st = db()->prepare('SELECT COUNT(*) FROM notifications WHERE ' . $cond);
+            $st->execute([(int)$me['id']]);
+            $total = (int)$st->fetchColumn();
+            $st = db()->prepare('SELECT COUNT(*) FROM notifications WHERE user_id = ? AND is_read = 0');
+            $st->execute([(int)$me['id']]);
+            $unread = (int)$st->fetchColumn();
+            $off = ($page - 1) * $ps;
+            $st = db()->prepare('SELECT * FROM notifications WHERE ' . $cond . ' ORDER BY id DESC LIMIT ' . $ps . ' OFFSET ' . $off);
+            $st->execute([(int)$me['id']]);
+            json_out([
+                'list' => array_map('notify_public', $st->fetchAll()),
+                'total' => $total, 'unread' => $unread, 'page' => $page, 'page_size' => $ps,
+            ]);
+
+        case 'notification_read':
+            $me = current_user_or_401();
+            if ((int)param('all', 0) === 1) {
+                db()->prepare('UPDATE notifications SET is_read = 1 WHERE user_id = ?')->execute([(int)$me['id']]);
+            } else {
+                $id = (int)param('id', 0);
+                if ($id <= 0) json_error('参数错误');
+                db()->prepare('UPDATE notifications SET is_read = 1 WHERE id = ? AND user_id = ?')->execute([$id, (int)$me['id']]);
+            }
+            $st = db()->prepare('SELECT COUNT(*) FROM notifications WHERE user_id = ? AND is_read = 0');
+            $st->execute([(int)$me['id']]);
+            json_out(['ok' => true, 'unread' => (int)$st->fetchColumn()]);
+
+        case 'notification_delete':
+            $me = current_user_or_401();
+            $id = (int)param('id', 0);
+            if ($id <= 0) json_error('参数错误');
+            db()->prepare('DELETE FROM notifications WHERE id = ? AND user_id = ?')->execute([$id, (int)$me['id']]);
+            json_out(['ok' => true]);
+
+        // ============ 后台: 群组管理 ============
+        case 'admin_groups':
+            require_admin();
+            $rows = db()->query("SELECT g.*,
+                    (SELECT COUNT(DISTINCT m.user_id) FROM social_messages m WHERE m.group_id = g.id) AS member_count,
+                    (SELECT COUNT(*) FROM social_messages m WHERE m.group_id = g.id) AS message_count
+                FROM social_groups g ORDER BY g.sort_order ASC, g.id ASC")->fetchAll();
+            json_out(['list' => array_map('social_group_public', $rows)]);
+
+        case 'admin_group_save':
+            require_admin();
+            $id = (int)param('id', 0);
+            $name = trim((string)param('name', ''));
+            if ($name === '') json_error('群组名称不能为空');
+            if (mb_strlen($name) > 20) json_error('群组名称不能超过 20 个字');
+            $icon = trim((string)param('icon', ''));
+            $desc = trim((string)param('description', ''));
+            if (mb_strlen($desc) > 100) json_error('简介不能超过 100 个字');
+            $sort = (int)param('sort_order', 0);
+            $active = (int)param('is_active', 1) === 1 ? 1 : 0;
+            $notice = trim((string)param('notice', ''));
+            $st = db()->prepare('SELECT id FROM social_groups WHERE name = ? AND id <> ?');
+            $st->execute([$name, $id]);
+            if ($st->fetch()) json_error('已存在同名群组');
+            if ($id > 0) {
+                db()->prepare('UPDATE social_groups SET name = ?, icon = ?, description = ?, sort_order = ?, is_active = ?, notice = ? WHERE id = ?')
+                    ->execute([$name, $icon, $desc, $sort, $active, $notice, $id]);
+                json_out(['id' => $id]);
+            }
+            db()->prepare('INSERT INTO social_groups (name, icon, description, sort_order, is_active, notice) VALUES (?, ?, ?, ?, ?, ?)')
+                ->execute([$name, $icon, $desc, $sort, $active, $notice]);
+            json_out(['id' => (int)db()->lastInsertId()]);
+
+        case 'admin_group_delete':
+            require_admin();
+            $id = (int)param('id', 0);
+            if ($id <= 0) json_error('参数错误');
+            db()->prepare('DELETE FROM social_messages WHERE group_id = ?')->execute([$id]);
+            db()->prepare('DELETE FROM social_groups WHERE id = ?')->execute([$id]);
+            json_out(['ok' => true]);
+
+        // ============ 后台: 群消息管理 ============
+        case 'admin_social_messages':
+            require_admin();
+            $page = max(1, (int)param('page', 1));
+            $ps = min(100, max(1, (int)param('page_size', 20)));
+            $gid = (int)param('group_id', 0);
+            $kw = trim((string)param('keyword', ''));
+            $where = []; $args = [];
+            if ($gid > 0) { $where[] = 'm.group_id = ?'; $args[] = $gid; }
+            if ($kw !== '') { $where[] = 'm.content LIKE ?'; $args[] = '%' . $kw . '%'; }
+            $cond = $where ? ('WHERE ' . implode(' AND ', $where)) : '';
+            $st = db()->prepare('SELECT COUNT(*) FROM social_messages m ' . $cond);
+            $st->execute($args);
+            $total = (int)$st->fetchColumn();
+            $off = ($page - 1) * $ps;
+            $st = db()->prepare("SELECT m.*, u.nickname, u.username, u.avatar, u.role, g.name AS group_name
+                FROM social_messages m LEFT JOIN users u ON u.id = m.user_id LEFT JOIN social_groups g ON g.id = m.group_id
+                " . $cond . ' ORDER BY m.id DESC LIMIT ' . $ps . ' OFFSET ' . $off);
+            $st->execute($args);
+            $rows = $st->fetchAll();
+            foreach ($rows as $i => $r) {
+                $rows[$i]['group_name'] = (string)$r['group_name'];
+                $rows[$i]['nickname'] = ($r['nickname'] !== null && $r['nickname'] !== '') ? $r['nickname'] : (string)$r['username'];
+            }
+            json_out(['list' => array_map('social_msg_public', $rows), 'total' => $total, 'page' => $page, 'page_size' => $ps]);
+
+        case 'admin_social_message_delete':
+            require_admin();
+            $id = (int)param('id', 0);
+            if ($id <= 0) json_error('参数错误');
+            db()->prepare('DELETE FROM social_messages WHERE id = ?')->execute([$id]);
+            json_out(['ok' => true]);
+
+        // ============ 后台: 通知下发 ============
+        case 'admin_notify_send':
+            require_admin();
+            $title = trim((string)param('title', ''));
+            $content = trim((string)param('content', ''));
+            $type = param('type', 'admin') === 'system' ? 'system' : 'admin';
+            $link = trim((string)param('link', ''));
+            if ($title === '') json_error('标题不能为空');
+            if ($content === '') json_error('内容不能为空');
+            if (mb_strlen($title) > 50) json_error('标题不能超过 50 个字');
+            $target = param('target', 'all');
+            if ($target === 'all' || $target === '' || (int)$target === 0) {
+                $count = notify_push_all($title, $content, $type, $link);
+            } else {
+                $uid = (int)$target;
+                $st = db()->prepare('SELECT id FROM users WHERE id = ?');
+                $st->execute([$uid]);
+                if (!$st->fetch()) json_error('用户不存在');
+                notify_push($uid, $title, $content, $type, $link);
+                $count = 1;
+            }
+            json_out(['ok' => true, 'count' => $count]);
+
+        case 'admin_notification_list':
+            require_admin();
+            $page = max(1, (int)param('page', 1));
+            $ps = min(100, max(1, (int)param('page_size', 20)));
+            $kw = trim((string)param('keyword', ''));
+            $where = []; $args = [];
+            if ($kw !== '') { $where[] = '(n.title LIKE ? OR n.content LIKE ?)'; $args[] = '%' . $kw . '%'; $args[] = '%' . $kw . '%'; }
+            $cond = $where ? ('WHERE ' . implode(' AND ', $where)) : '';
+            $st = db()->prepare('SELECT COUNT(*) FROM notifications n ' . $cond);
+            $st->execute($args);
+            $total = (int)$st->fetchColumn();
+            $off = ($page - 1) * $ps;
+            $st = db()->prepare("SELECT n.*, u.nickname, u.username FROM notifications n LEFT JOIN users u ON u.id = n.user_id
+                " . $cond . ' ORDER BY n.id DESC LIMIT ' . $ps . ' OFFSET ' . $off);
+            $st->execute($args);
+            $rows = $st->fetchAll();
+            foreach ($rows as $i => $r) {
+                $rows[$i]['user_name'] = ($r['nickname'] !== null && $r['nickname'] !== '') ? $r['nickname'] : (string)$r['username'];
+            }
+            json_out(['list' => $rows, 'total' => $total, 'page' => $page, 'page_size' => $ps]);
+
+        case 'admin_notification_delete':
+            require_admin();
+            $id = (int)param('id', 0);
+            if ($id <= 0) {
+                db()->exec('DELETE FROM notifications');
+                json_out(['ok' => true, 'cleared' => true]);
+            }
+            db()->prepare('DELETE FROM notifications WHERE id = ?')->execute([$id]);
+            json_out(['ok' => true]);
 
         case 'logout':
             $token = param('token', '');
@@ -1311,6 +1660,7 @@ function require_admin(): void
         $user = $stmt->fetch();
     }
     if (!$user) json_error('登录已失效', 401);
+    if (($user['role'] ?? '') !== 'admin') json_error('没有权限, 仅管理员可操作', 403);
 }
 
 /** 是否为已登录管理员 (不抛错, 用于公开接口按需附带敏感字段) */
@@ -1318,19 +1668,22 @@ function is_admin(): bool
 {
     $auth = $_SERVER['HTTP_AUTHORIZATION'] ?? '';
     $token = '';
-    if (preg_match('/Bearer\s+(\S+)/i', $auth, $m)) {
-        $token = $m[1];
+    if (preg_match('/Bearer\s+(\S+)/i', $auth, $mm)) {
+        $token = $mm[1];
     } else {
         $token = param('token', '');
     }
     if (!$token) return false;
-    // 多会话: 优先 sessions 表, 兼容旧 users.token
-    $stmt = db()->prepare('SELECT u.id FROM sessions s JOIN users u ON s.user_id = u.id WHERE s.token = ? AND u.is_active = 1');
+    // 多会话: 优先查 sessions 表, 兼容旧 users.token
+    $stmt = db()->prepare('SELECT u.id, u.role FROM sessions s JOIN users u ON s.user_id = u.id WHERE s.token = ? AND u.is_active = 1');
     $stmt->execute([$token]);
-    if ($stmt->fetch()) return true;
-    $stmt = db()->prepare('SELECT id FROM users WHERE token = ? AND is_active = 1');
-    $stmt->execute([$token]);
-    return (bool)$stmt->fetch();
+    $row = $stmt->fetch();
+    if (!$row) {
+        $stmt = db()->prepare('SELECT id, role FROM users WHERE token = ? AND is_active = 1');
+        $stmt->execute([$token]);
+        $row = $stmt->fetch();
+    }
+    return $row && ($row['role'] ?? '') === 'admin';
 }
 
 /** 插入软件, 返回新 id */
@@ -1415,4 +1768,164 @@ function user_public(array $u): array
         'is_active'      => (int)($u['is_active'] ?? 1),
         'created_at'     => $u['created_at'] ?? '',
     ];
+}
+
+
+// ==================== 社交系统辅助函数 ====================
+
+/** 生成图形验证码, 返回 [token, code] */
+function captcha_generate(): array
+{
+    $chars = 'ABCDEFGHJKLMNPQRSTUVWXY3456789';
+    $code = '';
+    $len = strlen($chars);
+    for ($i = 0; $i < 4; $i++) {
+        $code .= $chars[random_int(0, $len - 1)];
+    }
+    $token = bin2hex(random_bytes(16));
+    try {
+        db()->prepare('INSERT INTO captcha_codes (token, code, ip, used, expires_at) VALUES (?, ?, ?, 0, DATE_ADD(NOW(), INTERVAL 180 SECOND))')
+            ->execute([$token, $code, client_ip()]);
+        db()->exec('DELETE FROM captcha_codes WHERE expires_at < DATE_SUB(NOW(), INTERVAL 1 HOUR)');
+    } catch (Exception $e) {
+        error_log('[captcha] ' . $e->getMessage());
+    }
+    return [$token, $code];
+}
+
+/** 画一张 4 位验证码 PNG, 返回 data:image/png;base64,... */
+function captcha_image(string $code): string
+{
+    $w = 132;
+    $h = 46;
+    $im = imagecreatetruecolor($w, $h);
+    $bg = imagecolorallocate($im, 246, 247, 251);
+    imagefilledrectangle($im, 0, 0, $w, $h, $bg);
+    for ($i = 0; $i < 6; $i++) {
+        $c = imagecolorallocate($im, random_int(185, 225), random_int(185, 225), random_int(205, 240));
+        imageline($im, random_int(0, $w), random_int(0, $h), random_int(0, $w), random_int(0, $h), $c);
+    }
+    for ($i = 0; $i < 70; $i++) {
+        $c = imagecolorallocate($im, random_int(150, 230), random_int(150, 230), random_int(150, 230));
+        imagesetpixel($im, random_int(0, $w - 1), random_int(0, $h - 1), $c);
+    }
+    $len = strlen($code);
+    for ($i = 0; $i < $len; $i++) {
+        $c = imagecolorallocate($im, random_int(25, 105), random_int(25, 105), random_int(115, 195));
+        imagestring($im, 5, 14 + $i * 27, random_int(13, 24), $code[$i], $c);
+    }
+    ob_start();
+    imagepng($im);
+    $data = ob_get_clean();
+    imagedestroy($im);
+    return 'data:image/png;base64,' . base64_encode($data);
+}
+
+/** 校验图形验证码 (一次性, 无论对错都作废) */
+function captcha_check(string $token, string $code): bool
+{
+    if ($token === '' || $code === '') return false;
+    try {
+        $st = db()->prepare('SELECT * FROM captcha_codes WHERE token = ? LIMIT 1');
+        $st->execute([$token]);
+        $row = $st->fetch();
+        if (!$row) return false;
+        if ((int)$row['used'] === 1) return false;
+        if (strtotime((string)$row['expires_at']) < time()) return false;
+        db()->prepare('UPDATE captcha_codes SET used = 1 WHERE id = ?')->execute([$row['id']]);
+        return strtoupper(trim($code)) === strtoupper((string)$row['code']);
+    } catch (Exception $e) {
+        error_log('[captcha_check] ' . $e->getMessage());
+        return false;
+    }
+}
+
+/** 群组字段转公开结构 (需带 member_count/message_count/notice) */
+function social_group_public(array $g): array
+{
+    return [
+        'id'            => (int)$g['id'],
+        'name'          => (string)$g['name'],
+        'icon'          => (string)($g['icon'] ?? ''),
+        'description'   => (string)($g['description'] ?? ''),
+        'notice'        => (string)($g['notice'] ?? ''),
+        'member_count'  => (int)($g['member_count'] ?? 0),
+        'message_count' => (int)($g['message_count'] ?? 0),
+        'sort_order'    => (int)($g['sort_order'] ?? 0),
+        'is_active'     => (int)($g['is_active'] ?? 1),
+        'created_at'    => (string)($g['created_at'] ?? ''),
+    ];
+}
+
+/** 取群组, 不存在/停用则报错 */
+function social_group_or_404(int $id, bool $allowInactive)
+{
+    $st = db()->prepare('SELECT * FROM social_groups WHERE id = ?');
+    $st->execute([$id]);
+    $g = $st->fetch();
+    if (!$g || (!$allowInactive && (int)$g['is_active'] !== 1)) json_error('群组不存在或已停用');
+    return $g;
+}
+
+/** 消息字段转公开结构 */
+function social_msg_public(array $m): array
+{
+    $recalled = (int)($m['is_recalled'] ?? 0) === 1;
+    $at = ((string)($m['at_users'] ?? '')) !== '' ? array_map('intval', explode(',', (string)$m['at_users'])) : [];
+    $ts = strtotime((string)($m['created_at'] ?? ''));
+    $nick = (string)($m['nickname'] ?? '');
+    if ($nick === '') $nick = '用户' . (int)$m['user_id'];
+    return [
+        'id'          => (int)$m['id'],
+        'group_id'    => (int)$m['group_id'],
+        'group_name'  => (string)($m['group_name'] ?? ''),
+        'user_id'     => (int)$m['user_id'],
+        'nickname'    => $nick,
+        'avatar'      => (string)($m['avatar'] ?? ''),
+        'role'        => (string)($m['role'] ?? 'user'),
+        'content'     => $recalled ? '' : (string)$m['content'],
+        'at'          => $at,
+        'is_recalled' => $recalled ? 1 : 0,
+        'created_at'  => (string)$m['created_at'],
+        'time_text'   => date('H:i', $ts ?: time()),
+    ];
+}
+
+/** 通知字段转公开结构 */
+function notify_public(array $n): array
+{
+    return [
+        'id'         => (int)$n['id'],
+        'title'      => (string)$n['title'],
+        'content'    => (string)$n['content'],
+        'type'       => (string)$n['type'],
+        'link'       => (string)($n['link'] ?? ''),
+        'is_read'    => (int)$n['is_read'] === 1 ? 1 : 0,
+        'created_at' => (string)$n['created_at'],
+    ];
+}
+
+/** 给单个用户推送一条通知 */
+function notify_push(int $userId, string $title, string $content, string $type = 'system', string $link = ''): void
+{
+    if ($userId <= 0) return;
+    try {
+        db()->prepare('INSERT INTO notifications (user_id, title, content, type, link, is_read) VALUES (?, ?, ?, ?, ?, 0)')
+            ->execute([$userId, $title, $content, $type, $link]);
+    } catch (Exception $e) {
+        error_log('[notify_push] ' . $e->getMessage());
+    }
+}
+
+/** 给全部启用用户推送通知, 返回成功条数 */
+function notify_push_all(string $title, string $content, string $type = 'admin', string $link = ''): int
+{
+    $ids = db()->query('SELECT id FROM users WHERE is_active = 1')->fetchAll(PDO::FETCH_COLUMN);
+    if (!$ids) return 0;
+    $st = db()->prepare('INSERT INTO notifications (user_id, title, content, type, link, is_read) VALUES (?, ?, ?, ?, ?, 0)');
+    $n = 0;
+    foreach ($ids as $id) {
+        try { $st->execute([(int)$id, $title, $content, $type, $link]); $n++; } catch (Exception $e) {}
+    }
+    return $n;
 }
