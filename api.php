@@ -625,6 +625,32 @@ try {
             db()->prepare('UPDATE social_groups SET notice = ? WHERE id = ?')->execute([$notice, $gid]);
             json_out(['ok' => true]);
 
+        // 群成员候选 (供客户端 @ 选择): 在该群发过言的活跃用户 + 全部管理员, 排除自己
+        case 'social_group_members':
+            $me = current_user_or_401();
+            $gid = (int)param('group_id', 0);
+            social_group_or_404($gid, false);
+            $st = db()->prepare("SELECT DISTINCT u.id, u.nickname, u.username, u.avatar, u.role
+                    FROM users u
+                    WHERE u.is_active = 1 AND u.id <> ? AND (
+                        u.role = 'admin'
+                        OR EXISTS (SELECT 1 FROM social_messages m WHERE m.user_id = u.id AND m.group_id = ?)
+                    )
+                    ORDER BY u.role ASC, u.id ASC");
+            $st->execute([(int)$me['id'], $gid]);
+            $list = [];
+            foreach ($st->fetchAll() as $u) {
+                $nick = trim((string)($u['nickname'] ?? ''));
+                $list[] = [
+                    'id' => (int)$u['id'],
+                    'nickname' => $nick !== '' ? $nick : (string)$u['username'],
+                    'username' => (string)$u['username'],
+                    'avatar' => (string)($u['avatar'] ?? ''),
+                    'role' => (string)$u['role'],
+                ];
+            }
+            json_out(['list' => $list]);
+
         // ============ 消息通知 ============
         case 'notifications':
             $me = current_user_or_401();
