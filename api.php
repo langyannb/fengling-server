@@ -708,6 +708,13 @@ try {
             require_admin();
             $id = (int)param('id', 0);
             $name = trim((string)param('name', ''));
+            // 更新时未提交 name 字段则沿用原值, 避免「一键启用/停用」这类只传部分字段的调用被拒
+            if ($id > 0 && !has_param('name')) {
+                $stn0 = db()->prepare('SELECT name FROM social_groups WHERE id = ?');
+                $stn0->execute([$id]);
+                $oldN0 = $stn0->fetch();
+                if ($oldN0) $name = (string)($oldN0['name'] ?? '');
+            }
             if ($name === '') json_error('群组名称不能为空');
             if (mb_strlen($name) > 20) json_error('群组名称不能超过 20 个字');
             $icon = trim((string)param('icon', ''));
