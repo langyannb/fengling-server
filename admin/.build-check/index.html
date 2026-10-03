@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#165DFF" />
+    <meta name="description" content="风铃分享库管理后台" />
+    <title>风铃分享库 · 管理后台</title>
+    <style>
+      /* 首屏加载占位, Vue 挂载后会被替换 */
+      html, body { margin: 0; background: #f7f8fa; }
+      #app { min-height: 100vh; }
+      .boot-loading {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 10px;
+        font-size: 14px;
+        color: #86909c;
+        font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif;
+        background: linear-gradient(160deg, #eef4ff 0%, #f7f8fa 45%, #eafaf3 100%);
+      }
+      .boot-dot {
+        width: 9px;
+        height: 9px;
+        border-radius: 50%;
+        background: #165DFF;
+        animation: bootPulse 1s ease-in-out infinite;
+      }
+      @keyframes bootPulse {
+        0%, 100% { transform: scale(0.7); opacity: 0.45; }
+        50% { transform: scale(1); opacity: 1; }
+      }
+    </style>
+    <script type="module" crossorigin src="./assets/index-3h6XYIIn.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-DcbHL_QO.css">
+  </head>
+  <body>
+    <div id="app"><div class="boot-loading"><span class="boot-dot"></span>加载中…</div></div>
+  </body>
+</html>

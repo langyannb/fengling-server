@@ -593,10 +593,23 @@ try {
             $at = array_values(array_unique(array_filter(array_map('intval', $at), function ($v) use ($me) {
                 return $v > 0 && $v !== (int)$me['id'];
             })));
+            // @所有人: 只有管理员能发, 可以由 at_all=1 指定, 也可以在内容里写 @所有人
+            $isAdminSender = ($me['role'] ?? '') === 'admin';
+            $atAll = $isAdminSender && (
+                (int)param('at_all', 0) === 1 || mb_strpos($content, '@所有人') !== false
+            );
+            // at_users 里用 0 作为 "所有人" 的标记位 (真实用户 id 都 > 0)
+            $atStore = $atAll ? array_merge([0], $at) : $at;
             db()->prepare('INSERT INTO social_messages (group_id, user_id, content, at_users, is_recalled) VALUES (?, ?, ?, ?, 0)')
-                ->execute([$gid, (int)$me['id'], $content, implode(',', $at)]);
+                ->execute([$gid, (int)$me['id'], $content, implode(',', $atStore)]);
             $mid = (int)db()->lastInsertId();
-            if ($at) {
+            if ($atAll) {
+                $st = db()->prepare('SELECT id FROM users WHERE is_active = 1 AND id <> ?');
+                $st->execute([(int)$me['id']]);
+                foreach ($st->fetchAll() as $t) {
+                    notify_push((int)$t['id'], '「' . $g['name'] . '」有人 @了所有人', mb_substr($content, 0, 80), 'social');
+                }
+            } elseif ($at) {
                 $in = implode(',', array_fill(0, count($at), '?'));
                 $st = db()->prepare('SELECT id FROM users WHERE id IN (' . $in . ') AND is_active = 1');
                 $st->execute($at);
@@ -604,7 +617,7 @@ try {
                     notify_push((int)$t['id'], '有人在「' . $g['name'] . '」@了你', mb_substr($content, 0, 80), 'social');
                 }
             }
-            json_out(['id' => $mid, 'created_at' => date('Y-m-d H:i:s')]);
+            json_out(['id' => $mid, 'at_all' => $atAll ? 1 : 0, 'created_at' => date('Y-m-d H:i:s')]);
 
         case 'social_recall':
             $me = current_user_or_401();
