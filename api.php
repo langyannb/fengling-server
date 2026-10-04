@@ -1075,6 +1075,15 @@ try {
             }
             json_out(['id' => $mid, 'at_all' => $atAll ? 1 : 0, 'quote_id' => $quoteId, 'created_at' => date('Y-m-d H:i:s')]);
 
+        // ============ SSE 实时消息推送 (契约 A1~A4) ============
+        // 未登录: 先返回普通 JSON 401, 不进流模式 (契约 A1)
+        case 'stream':
+            $me = current_user();
+            if (!$me) json_error('登录已失效', 401);
+            // case 里只做鉴权和取参数, 流循环逻辑全部在 sse_run() 里 (便于 review)
+            sse_run($me, (int)param('pm_id', 0), (int)param('group_id', 0));
+            exit;
+
         case 'social_recall':
             $me = current_user_or_401();
             $id = (int)param('id', 0);
@@ -3136,6 +3145,131 @@ function social_msg_public(array $m): array
         'created_at'  => (string)$m['created_at'],
         'time_text'   => date('H:i', $ts ?: time()),
     ];
+}
+
+/**
+ * SSE 实时消息推送主循环 (契约 A2/A3/A4)。
+ * 只在 case 'stream' 中调用; 直接输出事件流, 正常不会返回 (超时/断开都走 exit)。
+ *
+ * @param array $me     当前登录用户行 (current_user() 的结果)
+ * @param int   $pmCur  客户端已见过的最大私聊消息 id (<=0 = 从现在开始)
+ * @param int   $grpCur 客户端已见过的最大群消息 id (<=0 = 从现在开始)
+ */
+function sse_run(array $me, int $pmCur, int $grpCur): void
+{
+    $meId = (int)$me['id'];
+
+    // 游标 <=0 => 「从现在开始」: 建立连接时初始化为当前 MAX(id), 绝不重放历史 (契约 A1)
+    if ($pmCur <= 0) {
+        $st = db()->prepare('SELECT COALESCE(MAX(id), 0) FROM social_pm_messages');
+        $st->execute();
+        $pmCur = (int)$st->fetchColumn();
+    }
+    if ($grpCur <= 0) {
+        $st = db()->prepare('SELECT COALESCE(MAX(id), 0) FROM social_messages');
+        $st->execute();
+        $grpCur = (int)$st->fetchColumn();
+    }
+
+    // 长连接: 关掉全部输出缓冲与 gzip, 不设脚本超时 (契约 A2)
+    while (ob_get_level() > 0) { ob_end_flush(); }
+    @ini_set('zlib.output_compression', '0');
+    @ini_set('output_buffering', '0');
+    set_time_limit(0);
+    ignore_user_abort(true);
+
+    header('Content-Type: text/event-stream; charset=utf-8');
+    header('Cache-Control: no-cache, no-store, must-revalidate');
+    header('X-Accel-Buffering: no');
+    header('Connection: keep-alive');
+    echo "retry: 2000\n\n";
+    flush();
+
+    $startAt  = time();
+    $lastHbAt = $startAt;
+    $maxSec   = 25;   // 单连接封顶 25 秒, 到点发 bye 让客户端立刻重连, 不长期占用 worker
+    $hbSec    = 10;   // 心跳间隔
+
+    while (true) {
+        if (connection_aborted()) exit;              // 客户端断开 -> 立刻退出
+        $now = time();
+        if ($now - $startAt >= $maxSec) {            // 25 秒封顶: event: bye
+            sse_event('bye', ['reason' => 'timeout']);
+            exit;
+        }
+        if ($now - $lastHbAt >= $hbSec) {            // 心跳: 注释行, 客户端忽略
+            echo ": hb\n\n";
+            flush();
+            $lastHbAt = $now;
+        }
+
+        // ---- 私聊: 别人发给我的、未撤回的 (契约 A4, 只用参数绑定) ----
+        $st = db()->prepare('SELECT m.id, m.conv_id, m.from_user, m.content, m.image, m.created_at,
+                                    u.nickname, u.username
+                               FROM social_pm_messages m JOIN users u ON u.id = m.from_user
+                              WHERE m.to_user = :me AND m.id > :cur AND m.is_recalled = 0
+                              ORDER BY m.id ASC LIMIT 20');
+        $st->execute([':me' => $meId, ':cur' => $pmCur]);
+        foreach ($st->fetchAll() as $r) {
+            if ((int)$r['id'] > $pmCur) $pmCur = (int)$r['id'];
+            if ((int)$r['from_user'] === $meId) continue;   // 自己发的不推
+            sse_event('pm', [
+                'id'         => (int)$r['id'],
+                'conv_id'    => (int)$r['conv_id'],
+                'from_user'  => (int)$r['from_user'],
+                'nickname'   => (string)(($r['nickname'] ?? '') !== '' ? $r['nickname'] : ('用户' . (int)$r['from_user'])),
+                'username'   => (string)($r['username'] ?? ''),
+                'content'    => (string)($r['content'] ?? ''),
+                'image'      => (string)($r['image'] ?? ''),
+                'created_at' => (string)($r['created_at'] ?? ''),
+            ]);
+        }
+
+        // ---- 群消息: 我以外的人发的、未撤回的 (契约 A4) ----
+        $st = db()->prepare('SELECT m.id, m.group_id, m.user_id, m.content, m.image, m.at_users, m.created_at,
+                                    u.nickname, g.name AS group_name
+                               FROM social_messages m
+                               JOIN users u ON u.id = m.user_id
+                               LEFT JOIN social_groups g ON g.id = m.group_id
+                              WHERE m.id > :cur AND m.user_id <> :me AND m.is_recalled = 0
+                              ORDER BY m.id ASC LIMIT 30');
+        $st->execute([':cur' => $grpCur, ':me' => $meId]);
+        foreach ($st->fetchAll() as $r) {
+            if ((int)$r['id'] > $grpCur) $grpCur = (int)$r['id'];
+            $atMe  = 0;
+            $atAll = 0;
+            $rawAt = (string)($r['at_users'] ?? '');
+            if ($rawAt !== '') {
+                foreach (explode(',', $rawAt) as $v) {
+                    $v = (int)trim($v);
+                    if ($v === 0) $atAll = 1;                 // 0 = 所有人 (真实用户 id 都 > 0)
+                    if ($v > 0 && $v === $meId) $atMe = 1;
+                }
+            }
+            sse_event('group', [
+                'id'         => (int)$r['id'],
+                'group_id'   => (int)$r['group_id'],
+                'group_name' => (string)($r['group_name'] ?? ''),
+                'user_id'    => (int)$r['user_id'],
+                'nickname'   => (string)(($r['nickname'] ?? '') !== '' ? $r['nickname'] : ('用户' . (int)$r['user_id'])),
+                'content'    => (string)($r['content'] ?? ''),
+                'image'      => (string)($r['image'] ?? ''),
+                'at_me'      => $atMe,
+                'at_all'     => $atAll,
+                'created_at' => (string)($r['created_at'] ?? ''),
+            ]);
+        }
+
+        usleep(1000000);   // 每 1.0 秒一个 tick
+    }
+}
+
+/** 输出一条标准 SSE 事件 (event / data / 空行, 三行) */
+function sse_event(string $event, array $data): void
+{
+    echo 'event: ' . $event . "\n";
+    echo 'data: ' . json_encode($data, JSON_UNESCAPED_UNICODE) . "\n\n";
+    flush();
 }
 
 /** 通知字段转公开结构 */
