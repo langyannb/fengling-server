@@ -994,6 +994,10 @@ try {
             if ((int)$me['is_active'] !== 1) json_error('你已被封禁', 403);
             $gid = (int)param('group_id', 0);
             $g = social_group_or_404($gid, false);
+            // 全员禁言: 非管理员一律拦截 (管理员不受限)
+            if ((int)($g['all_muted'] ?? 0) === 1 && ($me['role'] ?? '') !== 'admin') {
+                json_error('群主已开启全体禁言, 暂时不能发言', 403);
+            }
             // 管理员禁言: 群里 / 全站被禁言的用户不能发言 (管理员不受限)
             if (($me['role'] ?? '') !== 'admin') {
                 $muteState = user_mute_state((int)$me['id'], $gid);
@@ -1116,6 +1120,18 @@ try {
                 }
             }
             json_out(['ok' => true, 'notified' => $notice !== '']);
+
+        // 群全体禁言 (仅管理员可设置): 开启后该群除管理员外都不能发言
+        case 'social_group_allmute_set':
+            require_admin();
+            $gid = (int)param('group_id', 0);
+            if ($gid <= 0) json_error('参数错误');
+            $muted = (int)param('muted', 0) === 1 ? 1 : 0;
+            $stg = db()->prepare('SELECT id FROM social_groups WHERE id = ?');
+            $stg->execute([$gid]);
+            if (!$stg->fetchColumn()) json_error('群组不存在');
+            db()->prepare('UPDATE social_groups SET all_muted = ? WHERE id = ?')->execute([$muted, $gid]);
+            json_out(['group_id' => $gid, 'all_muted' => $muted]);
 
         // 消息免打扰 (每个用户对自己生效)
         case 'social_mute_set':
@@ -1392,6 +1408,9 @@ try {
             if (mb_strlen($desc) > 100) json_error('简介不能超过 100 个字');
             $sort = (int)param('sort_order', 0);
             $active = (int)param('is_active', 1) === 1 ? 1 : 0;
+            // 全体禁言: 仅当调用方显式提交 all_muted 时才写库 (一键启用/停用不会误清)
+            $hasAllMuted = has_param('all_muted');
+            $allMuted = (int)param('all_muted', 0) === 1 ? 1 : 0;
             $notice = trim((string)param('notice', ''));
             // 未提交 notice 字段时沿用原公告, 避免「一键启用/停用」把公告清空
             if ($id > 0 && !has_param('notice')) {
@@ -1406,11 +1425,18 @@ try {
             if ($id > 0) {
                 db()->prepare('UPDATE social_groups SET name = ?, icon = ?, description = ?, sort_order = ?, is_active = ?, notice = ? WHERE id = ?')
                     ->execute([$name, $icon, $desc, $sort, $active, $notice, $id]);
+                if ($hasAllMuted) {
+                    db()->prepare('UPDATE social_groups SET all_muted = ? WHERE id = ?')->execute([$allMuted, $id]);
+                }
                 json_out(['id' => $id]);
             }
             db()->prepare('INSERT INTO social_groups (name, icon, description, sort_order, is_active, notice) VALUES (?, ?, ?, ?, ?, ?)')
                 ->execute([$name, $icon, $desc, $sort, $active, $notice]);
-            json_out(['id' => (int)db()->lastInsertId()]);
+            $newGid = (int)db()->lastInsertId();
+            if ($hasAllMuted) {
+                db()->prepare('UPDATE social_groups SET all_muted = ? WHERE id = ?')->execute([$allMuted, $newGid]);
+            }
+            json_out(['id' => $newGid]);
 
         case 'admin_group_delete':
             require_admin();
@@ -3102,6 +3128,7 @@ function social_group_public(array $g, int $muted = 0, int $unread = 0, int $fir
         'message_count' => (int)($g['message_count'] ?? 0),
         'sort_order'    => (int)($g['sort_order'] ?? 0),
         'is_active'     => (int)($g['is_active'] ?? 1),
+        'all_muted'     => (int)($g['all_muted'] ?? 0),
         'created_at'    => (string)($g['created_at'] ?? ''),
     ];
 }
@@ -3189,6 +3216,7 @@ function sse_run(array $me, int $pmCur, int $grpCur): void
     $lastHbAt = $startAt;
     $maxSec   = 25;   // 单连接封顶 25 秒, 到点发 bye 让客户端立刻重连, 不长期占用 worker
     $hbSec    = 10;   // 心跳间隔
+    $mutedIds = my_muted_ids();   // 收件人对各群的免打扰状态 (key = group_id), 心跳时刷新
 
     while (true) {
         if (connection_aborted()) exit;              // 客户端断开 -> 立刻退出
@@ -3200,6 +3228,7 @@ function sse_run(array $me, int $pmCur, int $grpCur): void
         if ($now - $lastHbAt >= $hbSec) {            // 心跳: 注释行, 客户端忽略
             echo ": hb\n\n";
             flush();
+            $mutedIds = my_muted_ids();   // 免打扰状态变化后 10 秒内生效
             $lastHbAt = $now;
         }
 
@@ -3256,6 +3285,7 @@ function sse_run(array $me, int $pmCur, int $grpCur): void
                 'image'      => (string)($r['image'] ?? ''),
                 'at_me'      => $atMe,
                 'at_all'     => $atAll,
+                'muted'      => isset($mutedIds[(int)$r['group_id']]) ? 1 : 0,
                 'created_at' => (string)($r['created_at'] ?? ''),
             ]);
         }
