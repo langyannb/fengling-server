@@ -7,6 +7,23 @@
  */
 require_once __DIR__ . '/../config.php';
 
+// 该脚本会 ALTER TABLE, 绝不能匿名触发: 只允许 CLI 运行, 或 HTTP 带管理员 token
+if (PHP_SAPI !== 'cli') {
+    header('Content-Type: text/plain; charset=utf-8');
+    $tk = (string)($_GET['token'] ?? '');
+    $ok = false;
+    if ($tk !== '') {
+        $st = db()->prepare('SELECT COUNT(*) FROM users WHERE role = "admin" AND is_active = 1 AND token = ?');
+        $st->execute([$tk]);
+        $ok = ((int)$st->fetchColumn() > 0);
+    }
+    if (!$ok) {
+        http_response_code(403);
+        echo "禁止匿名执行。请用命令行: /www/server/php/85/bin/php tools/install_lottery_window.php\n";
+        exit;
+    }
+}
+
 $pdo = db();
 $n = 0;
 
