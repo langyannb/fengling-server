@@ -24,6 +24,9 @@
       <a-button :loading="loading" @click="load">
         <template #icon><icon-refresh /></template>刷新
       </a-button>
+      <a-button status="danger" @click="openClear">
+        <template #icon><icon-delete /></template>一键清除
+      </a-button>
       <span class="muted">共 {{ total }} 条</span>
     </div>
 
@@ -136,6 +139,29 @@
       </template>
       <template #empty>暂无群消息</template>
     </a-table>
+
+    <!-- 一键清除: 删除当前筛选条件下的全部群消息 (group_id=0 表示全部群) -->
+    <a-modal
+      v-model:visible="showClear"
+      title="一键清除群消息"
+      :width="modalWidth(520)"
+      :ok-loading="clearing"
+      ok-text="确认清除"
+      cancel-text="取消"
+      :ok-button-props="{ status: 'danger' }"
+      unmount-on-close
+      @ok="doClear"
+    >
+      <div class="clear-warn">
+        <div>筛选范围：<span class="clear-scope">{{ clearScopeText }}</span></div>
+        <div>关键词：<span class="clear-scope">{{ kw.trim() || '（无，不限内容）' }}</span></div>
+        <div class="clear-danger">
+          将删除符合上述条件的 {{ total }} 条群消息，且<b>无法恢复</b>。
+        </div>
+      </div>
+      <a-input v-model="clearNote" placeholder="备注（可选，仅作记录）" allow-clear />
+      <div class="form-tip">确认后立即删除且不可撤销；删除完成后列表会重置到第 1 页。</div>
+    </a-modal>
   </a-card>
 </template>
 
@@ -274,6 +300,43 @@ function delMessage(record) {
   })
 }
 
+// ===== 一键清除群消息 =====
+const showClear = ref(false)
+const clearing = ref(false)
+const clearNote = ref('')
+
+/** 当前筛选范围文案: 全部群组 / 具体群组名 */
+const clearScopeText = computed(() => {
+  if (!filterGroup.value) return '全部群组'
+  const hit = groups.value.find((g) => Number(g.id) === Number(filterGroup.value))
+  return hit ? `单个群组: ${hit.name}` : `单个群组: 群组 #${filterGroup.value}`
+})
+
+function openClear() {
+  clearNote.value = ''
+  showClear.value = true
+}
+
+/** 确认清除: group_id = 0 表示全部群; 有搜索词就带 keyword; 成功后刷新并回到第 1 页 */
+async function doClear() {
+  clearing.value = true
+  try {
+    const params = { group_id: Number(filterGroup.value) || 0 }
+    if (kw.value.trim()) params.keyword = kw.value.trim()
+    const r = await api('admin_social_message_clear', params, 'POST')
+    if (r.code !== 0) {
+      if (r.code !== 401) Message.error(r.msg || '清除失败')
+      return
+    }
+    showClear.value = false
+    Message.success(`已清除 ${Number((r.data && r.data.deleted) || 0)} 条群消息`)
+    pagination.value.current = 1
+    load()
+  } finally {
+    clearing.value = false
+  }
+}
+
 onMounted(() => {
   loadGroups()
   load()
@@ -298,6 +361,11 @@ onMounted(() => {
 /* 撤回的消息统一灰色显示 */
 .recalled { color: var(--color-text-3); font-size: 13px; }
 .msg-content { word-break: break-word; }
+/* 一键清除确认弹窗 */
+.clear-warn { margin-bottom: 12px; font-size: 13px; line-height: 1.9; color: var(--color-text-2); }
+.clear-scope { color: var(--color-text-1); font-weight: 600; }
+.clear-danger { color: rgb(var(--danger-6)); font-weight: 600; }
+.form-tip { font-size: 12px; color: var(--color-text-3); line-height: 1.6; margin-top: 8px; }
 /* 群消息图片缩略图 (点开可放大) */
 .msg-thumb { border-radius: 6px; overflow: hidden; cursor: zoom-in; }
 
