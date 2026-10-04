@@ -243,6 +243,11 @@
 
         <!-- ==================== 三、活动设置 ==================== -->
         <a-tab-pane key="config" title="活动设置">
+          <!-- 显著说明: 0 = 不限 (服务端 >999 会报错) -->
+          <a-alert type="info" style="margin-bottom: 12px">
+            <div><b>每日抽奖次数：0 = 不限</b>（该用户每天都能抽，只受「默认每人抽奖次数 / 用户单独设置」限制）。</div>
+            <div>填 1-999 = 每人每天最多抽这么多次，次日自动重置；超过 999 服务端会报错。</div>
+          </a-alert>
           <a-spin :loading="configLoading" style="width: 100%">
             <a-form :model="configForm" layout="vertical" class="config-form">
               <a-form-item label="抽奖开关">
@@ -265,6 +270,12 @@
                 <a-input-number v-model="configForm.per_user_limit" :min="0" :precision="0" style="width: 100%" />
                 <div class="form-tip">0 = 默认每人不能抽；每个用户可以用「用户管理 → 设置抽奖次数」单独覆盖。</div>
               </a-form-item>
+              <a-form-item label="每日抽奖次数">
+                <a-input-number v-model="configForm.daily_limit" :min="0" :max="999" :precision="0" style="width: 100%" />
+                <div class="form-tip">
+                  <b>0 = 不限</b>（每人每天都能抽）；1-999 = 每人每天最多抽这么多次，次日自动重置。
+                </div>
+              </a-form-item>
               <a-form-item>
                 <a-button type="primary" :loading="configSaving" @click="saveConfig">保存</a-button>
                 <a-button :loading="configLoading" style="margin-left: 8px" @click="loadConfig">刷新</a-button>
@@ -273,6 +284,51 @@
           </a-spin>
         </a-tab-pane>
       </a-tabs>
+    </a-card>
+
+    <!-- ============ 重置与清空 ============ -->
+    <a-card :bordered="false" class="page-card reset-card">
+      <template #title>重置与清空</template>
+      <a-alert type="warning" class="reset-alert">
+        重置只影响次数和记录，不影响奖项和卡密池；整个活动重开会把已发出去的卡密收回池子，请谨慎操作。
+      </a-alert>
+
+      <div class="reset-switches">
+        <span class="reset-switch">
+          <a-switch v-model="resetReleaseCodes" />
+          <span>把已发卡密退回卡密池</span>
+        </span>
+        <span class="reset-switch">
+          <a-switch v-model="resetClearNotices" />
+          <span>删除含卡密的通知</span>
+        </span>
+        <span class="muted">(两个开关仅在「整个活动重开」时生效)</span>
+      </div>
+
+      <div class="reset-actions">
+        <a-button
+          :loading="resetting === 'quota'"
+          :disabled="!!resetting && resetting !== 'quota'"
+          @click="doReset('quota')"
+        >
+          只清所有人总次数
+        </a-button>
+        <a-button
+          :loading="resetting === 'daily'"
+          :disabled="!!resetting && resetting !== 'daily'"
+          @click="doReset('daily')"
+        >
+          只清所有人今日次数
+        </a-button>
+        <a-button
+          status="danger"
+          :loading="resetting === 'activity'"
+          :disabled="!!resetting && resetting !== 'activity'"
+          @click="doReset('activity')"
+        >
+          整个活动重开
+        </a-button>
+      </div>
     </a-card>
 
     <!-- ============ 新增 / 编辑奖项 ============ -->
@@ -493,7 +549,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, h, onMounted, ref } from 'vue'
 import { Message, Modal } from '@arco-design/web-vue'
 import { api } from '../api'
 import { isMobile, modalWidth, tableScroll } from '../composables/useResponsive'
@@ -885,7 +941,7 @@ function onDrawPageSizeChange(pageSize) {
 // ============ 活动设置 ============
 const configLoading = ref(false)
 const configSaving = ref(false)
-const configForm = ref({ enabled: 0, title: '', content: '', per_user_limit: 1 })
+const configForm = ref({ enabled: 0, title: '', content: '', per_user_limit: 1, daily_limit: 0 })
 
 async function loadConfig() {
   configLoading.value = true
@@ -905,6 +961,7 @@ async function loadConfig() {
     title: d.title || '',
     content: d.content || '',
     per_user_limit: num(d.per_user_limit),
+    daily_limit: num(d.daily_limit),
   }
 }
 
@@ -917,6 +974,7 @@ async function saveConfig() {
       title: f.title || '',
       content: f.content || '',
       per_user_limit: num(f.per_user_limit),
+      daily_limit: num(f.daily_limit),
     }, 'POST')
     if (r.code !== 0) {
       if (r.code !== 401) Message.error(r.msg || '保存失败')
@@ -926,6 +984,74 @@ async function saveConfig() {
   } finally {
     configSaving.value = false
   }
+}
+
+// ============ 重置与清空 ============
+const resetting = ref('')
+const resetReleaseCodes = ref(true)
+const resetClearNotices = ref(true)
+
+/** 三档操作的二次确认文案 */
+const RESET_CONFIRM = {
+  quota: '重置后所有用户都可以重新抽满次数，中奖记录与已发卡密保留。此操作不可撤销。',
+  daily: '重置后所有用户今天可以重新抽，总次数不受影响。',
+  activity:
+    '将删除所有中奖记录、把所有已发出去的卡密退回卡密池、并删除消息中心里含卡密的通知。' +
+    '用户自己保存过的卡密截图不会被收回。此操作不可撤销！',
+}
+
+/** 危险文案用红色渲染 (Modal content 支持渲染函数) */
+function dangerText(text) {
+  return h('div', { style: 'color: rgb(var(--danger-6)); font-weight: 600; line-height: 1.75;' }, text)
+}
+
+/**
+ * 重置抽奖活动数据
+ *   mode=quota    只清所有人「总抽奖次数」(中奖记录与已发卡密保留)
+ *   mode=daily    只清所有人「今日已抽次数」(总次数不变, 今天能重新抽)
+ *   mode=activity 整个活动重开 (可选退回已发卡密 / 删除含卡密通知)
+ * 注意: action 必须放 URL 查询串, 由 api() 封装处理, 这里只管传参。
+ */
+function doReset(mode) {
+  if (resetting.value) return
+  const isActivity = mode === 'activity'
+  Modal.warning({
+    title: isActivity
+      ? '确认整个活动重开?'
+      : (mode === 'daily' ? '确认只清所有人今日次数?' : '确认只清所有人总次数?'),
+    // 这里传的是 VNode(不是函数): 方法式 Modal 会把函数直接当 slot 渲染函数调用并传入 props
+    content: isActivity ? dangerText(RESET_CONFIRM.activity) : (RESET_CONFIRM[mode] || ''),
+    okText: isActivity ? '重开活动' : '确认重置',
+    cancelText: '取消',
+    hideCancel: false,
+    okButtonProps: isActivity ? { status: 'danger' } : undefined,
+    // 用 onBeforeOk: 请求期间「确认」按钮自带 loading, 失败(返回 false)时弹窗保持打开
+    onBeforeOk: async () => {
+      resetting.value = mode
+      try {
+        const params = { mode }
+        if (isActivity) {
+          params.release_codes = resetReleaseCodes.value ? 1 : 0
+          params.clear_notices = resetClearNotices.value ? 1 : 0
+        }
+        const r = await api('admin_lottery_activity_reset', params, 'POST')
+        if (r.code !== 0) {
+          if (r.code !== 401) Message.error(r.msg || '重置失败')
+          return false
+        }
+        const d = r.data || {}
+        Message.success(
+          '已重置 ' + num(d.users) + ' 个用户；删除中奖记录 ' + num(d.draws_deleted) + ' 条；' +
+          '退回卡密 ' + num(d.codes_released) + ' 张；删除通知 ' + num(d.notices_deleted) + ' 条'
+        )
+        loadDraws()
+        loadPrizes()
+        return true
+      } finally {
+        resetting.value = ''
+      }
+    },
+  })
 }
 
 onMounted(() => {
@@ -947,8 +1073,16 @@ onMounted(() => {
 .m-pager { justify-content: flex-end; margin-top: 12px; }
 .form-tip { font-size: 12px; color: var(--color-text-3); line-height: 1.6; margin-top: 4px; }
 
+.reset-card { margin-top: 16px; }
+.reset-alert { margin-bottom: 14px; }
+.reset-switches { display: flex; flex-wrap: wrap; align-items: center; gap: 20px; margin-bottom: 16px; }
+.reset-switch { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--color-text-2); }
+.reset-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+
 @media (max-width: 820px) {
   .toolbar-spacer { display: none; }
   .config-form { max-width: 100%; }
+  .reset-actions { flex-direction: column; }
+  .reset-switches { gap: 12px; }
 }
 </style>

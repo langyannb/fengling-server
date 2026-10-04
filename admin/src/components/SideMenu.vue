@@ -31,6 +31,7 @@
       <a-menu-item key="groups">群组管理</a-menu-item>
       <a-menu-item key="social">群消息</a-menu-item>
       <a-menu-item key="notify">通知下发</a-menu-item>
+      <a-menu-item key="pm">私聊管理</a-menu-item>
     </a-sub-menu>
 
     <a-sub-menu key="g-settings">

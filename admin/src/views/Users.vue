@@ -6,7 +6,7 @@
         <a-input
           v-model="kw"
           class="grow"
-          placeholder="搜索用户名 / 昵称 / 邮箱"
+          placeholder="搜索用户名 / 昵称 / 邮箱 / 标签"
           allow-clear
           :style="isMobile ? 'width:100%' : 'width:240px'"
           @press-enter="search"
@@ -29,9 +29,13 @@
         <a-button type="primary" @click="openUser()">
           <template #icon><icon-plus /></template>新增用户
         </a-button>
+        <a-button @click="openTagManage">
+          <template #icon><icon-tag /></template>标签管理
+        </a-button>
         <a-button @click="openQuotaAll">
           <template #icon><icon-gift /></template>一键设置所有人抽奖次数
         </a-button>
+        <a-button status="danger" @click="resetQuotaAll">一键重置所有人抽奖次数</a-button>
         <a-button :loading="loading" @click="load">
           <template #icon><icon-refresh /></template>刷新
         </a-button>
@@ -81,6 +85,15 @@
                 <span class="m-card-value">{{ record.created_at || '-' }}</span>
               </div>
               <div class="m-card-row">
+                <span class="m-card-label">标签</span>
+                <span class="m-card-value">
+                  <span v-if="!tagList(record).length" class="muted">-</span>
+                  <span v-else class="tag-cell tag-cell-end">
+                    <span v-for="t in tagList(record)" :key="t" class="tag-chip">{{ t }}</span>
+                  </span>
+                </span>
+              </div>
+              <div class="m-card-row">
                 <span class="m-card-label">抽奖次数</span>
                 <span class="m-card-value">
                   <a-tag size="small" :color="quotaOf(record) === -1 ? 'gray' : 'arcoblue'">
@@ -97,6 +110,8 @@
                   {{ Number(record.is_active) ? '禁用' : '启用' }}
                 </a-button>
                 <a-button type="text" size="small" @click="openQuota(record)">设置抽奖次数</a-button>
+                <a-button type="text" size="small" @click="openTags(record)">设置标签</a-button>
+                <a-button type="text" size="small" status="warning" @click="resetQuota(record)">重置抽奖次数</a-button>
                 <a-button type="text" status="danger" size="small" @click="delUser(record)">删除</a-button>
               </div>
             </div>
@@ -117,7 +132,7 @@
         />
       </template>
       <template v-else>
-      <!-- 列宽合计 1602 (原 1372 + 抽奖次数 170 + 操作列加宽 60), 手机端由 tableScroll 兜底 >=720 -->
+      <!-- 列宽合计 1860 (上一批 1602 + 标签列 150 + 操作列加宽 60), 手机端由 tableScroll 兜底 >=720 -->
       <a-table
         :data="list"
         row-key="id"
@@ -166,6 +181,14 @@
               </a-tag>
             </template>
           </a-table-column>
+          <a-table-column title="标签" :width="150">
+            <template #cell="{ record }">
+              <span v-if="!tagList(record).length" class="muted">-</span>
+              <span v-else class="tag-cell">
+                <span v-for="t in tagList(record)" :key="t" class="tag-chip">{{ t }}</span>
+              </span>
+            </template>
+          </a-table-column>
           <a-table-column title="抽奖次数" :width="170">
             <template #cell="{ record }">
               <div class="quota-cell">
@@ -177,7 +200,7 @@
             </template>
           </a-table-column>
           <a-table-column title="注册时间" data-index="created_at" :width="180" />
-          <a-table-column title="操作" :width="340" fixed="right">
+          <a-table-column title="操作" :width="400" fixed="right">
             <template #cell="{ record }">
               <a-button type="text" size="small" @click="openUser(record)">编辑</a-button>
               <a-button type="text" size="small" @click="openMute(record)">禁言</a-button>
@@ -186,6 +209,8 @@
                 {{ Number(record.is_active) ? '禁用' : '启用' }}
               </a-button>
               <a-button type="text" size="small" @click="openQuota(record)">设置抽奖次数</a-button>
+              <a-button type="text" size="small" @click="openTags(record)">设置标签</a-button>
+              <a-button type="text" size="small" status="warning" @click="resetQuota(record)">重置抽奖次数</a-button>
               <a-button type="text" status="danger" size="small" @click="delUser(record)">删除</a-button>
             </template>
           </a-table-column>
@@ -343,11 +368,122 @@
         </a-form-item>
       </a-form>
     </a-modal>
+
+    <!-- 设置用户标签: 预设多选 + 自定义输入 (最多 5 个, 单个 <= 10 字) -->
+    <a-modal
+      v-model:visible="showTags"
+      title="设置用户标签"
+      :width="modalWidth(560)"
+      :ok-loading="tagSaving"
+      ok-text="保存"
+      cancel-text="取消"
+      unmount-on-close
+      @ok="saveTags"
+    >
+      <div class="mute-target">
+        设置用户：
+        <span class="mute-name">{{ tagForm.nickname || tagForm.username }}</span>
+        <span class="mute-id">(ID {{ tagForm.user_id }})</span>
+      </div>
+      <a-spin :loading="tagLoading" style="width: 100%">
+        <div class="tag-block">
+          <div class="tag-block-head">
+            <span>已选标签 ({{ tagForm.tags.length }}/{{ MAX_TAGS }})</span>
+            <a-button
+              v-if="tagForm.tags.length"
+              type="text"
+              status="danger"
+              size="mini"
+              @click="clearUserTags"
+            >清空该用户标签</a-button>
+          </div>
+          <div class="tag-picks">
+            <span v-if="!tagForm.tags.length" class="muted">暂未选择标签</span>
+            <span v-for="t in tagForm.tags" :key="'sel-' + t" class="tag-chip">{{ t }}</span>
+          </div>
+        </div>
+
+        <div class="tag-block">
+          <div class="tag-block-head"><span>可选标签 (点击切换选中)</span></div>
+          <div class="tag-picks">
+            <span v-if="!tagCandidates.length" class="muted">暂无预设标签，可在「标签管理」里新增</span>
+            <span
+              v-for="t in tagCandidates"
+              :key="'pick-' + t"
+              class="tag-pick"
+              :class="{ active: isTagOn(t) }"
+              @click="toggleTag(t)"
+            >{{ t }}</span>
+          </div>
+        </div>
+
+        <div class="tag-block">
+          <div class="tag-block-head"><span>自定义标签 (最多 10 个字)</span></div>
+          <div class="tag-add">
+            <a-input
+              v-model="tagInput"
+              placeholder="输入后回车或点「添加」"
+              allow-clear
+              @press-enter="addTag"
+            />
+            <a-button type="outline" @click="addTag">添加</a-button>
+          </div>
+        </div>
+        <div class="form-tip">
+          标签最多 5 个、每个不超过 10 个字；标签会展示在用户主页、私聊、群聊等位置，请谨慎使用。
+        </div>
+      </a-spin>
+    </a-modal>
+
+    <!-- 标签管理: 新增 / 删除预设标签 (删除二次确认) -->
+    <a-modal
+      v-model:visible="showTagManage"
+      title="标签管理"
+      :width="modalWidth(520)"
+      :footer="false"
+      unmount-on-close
+    >
+      <a-spin :loading="tagLoading" style="width: 100%">
+        <div class="tag-block">
+          <div class="tag-block-head"><span>新增预设标签</span></div>
+          <div class="tag-add">
+            <a-input
+              v-model="presetInput"
+              placeholder="如：骗子 / 风险提醒 (最多 10 个字)"
+              allow-clear
+              @press-enter="addPreset"
+            />
+            <a-button type="primary" :loading="presetSaving" @click="addPreset">新增</a-button>
+          </div>
+        </div>
+
+        <div class="tag-block">
+          <div class="tag-block-head"><span>已有预设 ({{ tagPresets.length }}/30)</span></div>
+          <div class="tag-picks">
+            <span v-if="!tagPresets.length" class="muted">暂无预设标签</span>
+            <span v-for="t in tagPresets" :key="'pre-' + t" class="tag-chip">
+              {{ t }}<span class="tag-del" @click="delPreset(t)">×</span>
+            </span>
+          </div>
+        </div>
+
+        <div class="tag-block">
+          <div class="tag-block-head"><span>已被使用的标签 ({{ tagUsed.length }})</span></div>
+          <div class="tag-picks">
+            <span v-if="!tagUsed.length" class="muted">暂无</span>
+            <span v-for="t in tagUsed" :key="'used-' + t" class="tag-chip">{{ t }}</span>
+          </div>
+        </div>
+        <div class="form-tip">
+          预设标签只是「快捷选项」，删除预设不会清掉已经打在用户身上的标签；单个用户最多 5 个标签。
+        </div>
+      </a-spin>
+    </a-modal>
   </div>
 </template>
 
 <script setup>
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { Message, Modal } from '@arco-design/web-vue'
 import { api } from '../api'
 import { isMobile, modalWidth, tableScroll } from '../composables/useResponsive'
@@ -360,8 +496,8 @@ const kw = ref('')
 const filterRole = ref('')
 const filterActive = ref('')
 
-// 表格横向滚动宽度: 所有列宽合计 1602px (桌面按此宽度, 手机端至少 720px)
-const scrollX = tableScroll(1602)
+// 表格横向滚动宽度: 所有列宽合计 1860px (桌面按此宽度, 手机端至少 720px)
+const scrollX = tableScroll(1860)
 
 // 分页: 服务端分页, 桌面端表格与手机端卡片共用同一 pagination
 const pagination = ref({
@@ -714,6 +850,251 @@ function saveQuotaAll() {
   })
 }
 
+// ===== 重置抽奖次数 (已抽次数清零, 中奖记录保留) =====
+
+/** 重置单个用户的抽奖次数: admin_lottery_quota_reset */
+function resetQuota(record) {
+  const name = record.username + (record.nickname ? ' (' + record.nickname + ')' : '')
+  Modal.warning({
+    title: '确认重置该用户的抽奖次数?',
+    content: '将把「' + name + '」的已抽次数清零 (当前已抽 ' + qnum(record.lottery_drawn) +
+      ' 次 / 剩余 ' + qnum(record.lottery_left) + ' 次)；' +
+      '中奖记录保留，重置后该用户可以重新抽满次数。此操作不可撤销。',
+    okText: '重置',
+    cancelText: '取消',
+    hideCancel: false,
+    okButtonProps: { status: 'danger' },
+    onOk: async () => {
+      const r = await api('admin_lottery_quota_reset', { user_id: Number(record.id) || 0 }, 'POST')
+      if (r.code !== 0) {
+        if (r.code !== 401) Message.error(r.msg || '重置失败')
+        return false
+      }
+      const d = (r.data || {})
+      Message.success('已重置, 当前已抽 ' + qnum(d.drawn) + ' 次 / 剩余 ' + qnum(d.left) + ' 次')
+      load()
+      return true
+    },
+  })
+}
+
+/** 一键重置所有人抽奖次数: admin_lottery_quota_reset_all (强制二次确认) */
+function resetQuotaAll() {
+  Modal.warning({
+    title: '确认重置所有人的抽奖次数?',
+    content: '将把所有用户的已抽次数全部清零（中奖记录保留），' +
+      '重置后所有用户都可以重新抽满次数。此操作影响全部用户且不可撤销，请谨慎操作。',
+    okText: '确认重置',
+    cancelText: '取消',
+    hideCancel: false,
+    okButtonProps: { status: 'danger' },
+    onOk: async () => {
+      const r = await api('admin_lottery_quota_reset_all', {}, 'POST')
+      if (r.code !== 0) {
+        if (r.code !== 401) Message.error(r.msg || '重置失败')
+        return false
+      }
+      Message.success('已重置 ' + qnum(r.data && r.data.updated) + ' 个用户的抽奖次数')
+      load()
+      return true
+    },
+  })
+}
+
+// ===== 用户标签 (管理员自定义警示标签: 最多 5 个, 单个不超过 10 个字) =====
+
+const MAX_TAGS = 5
+const TAG_MAX_LEN = 10
+
+/** 表格 / 卡片里的标签展示: 服务端 admin_users 每行已返回 tags (字符串数组) */
+function tagList(record) {
+  const t = record && record.tags
+  if (!Array.isArray(t)) return []
+  return t.map((x) => String(x).trim()).filter((x) => x !== '')
+}
+
+/** 标签候选 = 预设 (可删) + 已被使用的标签, 前端再去重一次 */
+const tagPresets = ref([])
+const tagUsed = ref([])
+const tagCandidates = computed(() => {
+  const out = []
+  tagPresets.value.concat(tagUsed.value).forEach((t) => {
+    const s = String(t || '').trim()
+    if (s && !out.includes(s)) out.push(s)
+  })
+  return out
+})
+
+const tagLoading = ref(false)
+
+/** 拉取预设 + 已被使用的标签 */
+async function loadTags() {
+  tagLoading.value = true
+  try {
+    const r = await api('admin_tags')
+    if (r.code !== 0) {
+      if (r.code !== 401) Message.error(r.msg || '标签加载失败')
+      return false
+    }
+    const d = r.data || {}
+    tagPresets.value = Array.isArray(d.presets) ? d.presets.map((x) => String(x)) : []
+    tagUsed.value = Array.isArray(d.used) ? d.used.map((x) => String(x)) : []
+    return true
+  } finally {
+    tagLoading.value = false
+  }
+}
+
+// 单个用户标签弹窗
+const showTags = ref(false)
+const tagSaving = ref(false)
+const tagInput = ref('')
+const tagForm = ref({ user_id: 0, username: '', nickname: '', tags: [] })
+
+function openTags(record) {
+  tagForm.value = {
+    user_id: Number(record.id) || 0,
+    username: record.username || '',
+    nickname: record.nickname || '',
+    tags: tagList(record).slice(0, MAX_TAGS),
+  }
+  tagInput.value = ''
+  showTags.value = true
+  loadTags()
+}
+
+function isTagOn(t) {
+  return tagForm.value.tags.includes(t)
+}
+
+/** 点击候选标签切换选中态 (超过 5 个直接拦住) */
+function toggleTag(t) {
+  const arr = tagForm.value.tags
+  const i = arr.indexOf(t)
+  if (i >= 0) { arr.splice(i, 1); return }
+  if (arr.length >= MAX_TAGS) { Message.warning('最多设置 ' + MAX_TAGS + ' 个标签'); return }
+  arr.push(t)
+}
+
+/** 自定义标签: 回车或点「添加」; 单个 > 10 字前端拦住 */
+function addTag() {
+  const t = (tagInput.value || '').trim()
+  if (!t) { Message.warning('请输入标签内容'); return }
+  if (Array.from(t).length > TAG_MAX_LEN) { Message.warning('标签不能超过 10 个字'); return }
+  if (isTagOn(t)) { Message.warning('该标签已在已选列表中'); tagInput.value = ''; return }
+  if (tagForm.value.tags.length >= MAX_TAGS) { Message.warning('最多设置 ' + MAX_TAGS + ' 个标签'); return }
+  tagForm.value.tags.push(t)
+  tagInput.value = ''
+}
+
+/** 保存标签: tags 用逗号拼接传给 admin_user_tags_set */
+async function saveTags() {
+  const f = tagForm.value
+  if (!f.tags.length) {
+    Message.warning('请先选择或输入标签；如需清空请点「清空该用户标签」')
+    return
+  }
+  tagSaving.value = true
+  try {
+    const r = await api('admin_user_tags_set', {
+      user_id: Number(f.user_id) || 0,
+      tags: f.tags.join(','),
+    }, 'POST')
+    if (r.code !== 0) {
+      if (r.code !== 401) Message.error(r.msg || '标签保存失败')
+      return
+    }
+    showTags.value = false
+    Message.success('标签已保存')
+    load()
+    loadTags()
+  } finally {
+    tagSaving.value = false
+  }
+}
+
+/** 清空该用户全部标签 (二次确认后提交空串) */
+function clearUserTags() {
+  const f = tagForm.value
+  Modal.warning({
+    title: '确认清空该用户的标签?',
+    content: '将清空「' + (f.nickname || f.username) + '」的全部标签' +
+      (f.tags.length ? '（当前：' + f.tags.join('、') + '）' : '') + '，此操作不可撤销。',
+    okText: '清空',
+    cancelText: '取消',
+    hideCancel: false,
+    okButtonProps: { status: 'danger' },
+    onOk: async () => {
+      const r = await api('admin_user_tags_set', { user_id: Number(f.user_id) || 0, tags: '' }, 'POST')
+      if (r.code !== 0) {
+        if (r.code !== 401) Message.error(r.msg || '清空失败')
+        return false
+      }
+      tagForm.value.tags = []
+      showTags.value = false
+      Message.success('已清空该用户标签')
+      load()
+      loadTags()
+      return true
+    },
+  })
+}
+
+// 标签管理 (预设标签的新增 / 删除)
+const showTagManage = ref(false)
+const presetSaving = ref(false)
+const presetInput = ref('')
+
+function openTagManage() {
+  presetInput.value = ''
+  showTagManage.value = true
+  loadTags()
+}
+
+/** 新增预设标签: tag <= 10 字 (后端上限 30 个) */
+async function addPreset() {
+  const t = (presetInput.value || '').trim()
+  if (!t) { Message.warning('标签不能为空'); return }
+  if (Array.from(t).length > TAG_MAX_LEN) { Message.warning('标签不能超过 10 个字'); return }
+  presetSaving.value = true
+  try {
+    const r = await api('admin_tag_preset_save', { tag: t }, 'POST')
+    if (r.code !== 0) {
+      if (r.code !== 401) Message.error(r.msg || '新增预设失败')
+      return
+    }
+    const d = r.data || {}
+    if (Array.isArray(d.presets)) tagPresets.value = d.presets.map((x) => String(x))
+    presetInput.value = ''
+    Message.success('已新增预设标签')
+  } finally {
+    presetSaving.value = false
+  }
+}
+
+/** 删除预设标签 (二次确认; 不会清掉用户身上已有的标签) */
+function delPreset(tag) {
+  Modal.warning({
+    title: '确认删除预设标签?',
+    content: '将从预设列表里删除「' + tag + '」，已经打给用户的标签不会被清除。',
+    okText: '删除',
+    cancelText: '取消',
+    hideCancel: false,
+    okButtonProps: { status: 'danger' },
+    onOk: async () => {
+      const r = await api('admin_tag_preset_delete', { tag }, 'POST')
+      if (r.code !== 0) {
+        if (r.code !== 401) Message.error(r.msg || '删除预设失败')
+        return false
+      }
+      const d = r.data || {}
+      if (Array.isArray(d.presets)) tagPresets.value = d.presets.map((x) => String(x))
+      Message.success('已删除预设标签')
+      return true
+    },
+  })
+}
+
 onMounted(load)
 </script>
 
@@ -734,4 +1115,27 @@ onMounted(load)
 @media (max-width: 820px) {
   .toolbar-spacer { display: none; }
 }
+/* ===== 用户标签 ===== */
+.tag-cell { display: inline-flex; flex-wrap: wrap; gap: 4px; vertical-align: middle; }
+.tag-cell-end { justify-content: flex-end; }
+.tag-chip {
+  display: inline-block; max-width: 100%; padding: 0 6px; height: 20px; line-height: 19px;
+  border-radius: 4px; font-size: 12px; white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis; background: #ffece8; color: #f53f3f; border: 1px solid #fdcdc5;
+}
+.tag-del { margin-left: 4px; cursor: pointer; font-weight: 700; }
+.tag-block { margin-bottom: 14px; }
+.tag-block-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  margin-bottom: 6px; font-size: 13px; color: var(--color-text-2);
+}
+.tag-picks { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-height: 26px; }
+.tag-pick {
+  display: inline-flex; align-items: center; padding: 2px 9px; border-radius: 6px;
+  font-size: 12px; line-height: 20px; cursor: pointer; user-select: none;
+  border: 1px solid var(--color-border-2); background: var(--color-fill-2); color: var(--color-text-1);
+}
+.tag-pick.active { border-color: #f53f3f; background: #ffece8; color: #f53f3f; font-weight: 600; }
+.tag-add { display: flex; align-items: center; gap: 8px; }
+.tag-add .arco-input-wrapper { flex: 1 1 auto; min-width: 0; }
 </style>

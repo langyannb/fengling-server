@@ -23,6 +23,7 @@ const routes = [
       { path: 'groups', name: 'groups', component: () => import('./views/Groups.vue'), meta: { title: '群组管理', icon: 'IconUserGroup', group: 'social' } },
       { path: 'social', name: 'social', component: () => import('./views/Social.vue'), meta: { title: '群消息', icon: 'IconMessage', group: 'social' } },
       { path: 'notify', name: 'notify', component: () => import('./views/Notify.vue'), meta: { title: '通知下发', icon: 'IconNotification', group: 'social' } },
+      { path: 'pm', name: 'pm', component: () => import('./views/Pm.vue'), meta: { title: '私聊管理', icon: 'IconMessage', group: 'social' } },
       { path: 'lottery', name: 'lottery', component: () => import('./views/Lottery.vue'), meta: { title: '抽奖管理', icon: 'IconGift', group: 'settings' } },
     ],
   },
