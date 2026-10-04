@@ -369,7 +369,13 @@ try {
             $st = db()->prepare('SELECT * FROM users' . $wsql . ' ORDER BY id ASC LIMIT ' . (($page - 1) * $size) . ', ' . $size);
             $st->execute($args);
             json_out([
-                'list'      => array_map('user_public', $st->fetchAll()),
+                'list'      => array_map(function ($u) {
+                    $p = user_public($u);
+                    $p['lottery_quota'] = (int)($u['lottery_quota'] ?? -1);
+                    $p['lottery_drawn'] = lottery_drawn_count((int)$u['id']);
+                    $p['lottery_left']  = lottery_left_for($u);
+                    return $p;
+                }, $st->fetchAll()),
                 'total'     => $total,
                 'page'      => $page,
                 'page_size' => $size,
@@ -588,6 +594,7 @@ try {
             $me = current_user_or_401();
             $gid = (int)param('group_id', 0);
             $after = (int)param('after_id', 0);
+            $before = (int)param('before_id', 0);
             $around = (int)param('around_id', 0);
             $limit = min(50, max(1, (int)param('limit', 30)));
             social_group_or_404($gid, false);
@@ -603,6 +610,11 @@ try {
                 $st = db()->prepare($sql . ' AND m.id > ? ORDER BY m.id ASC LIMIT ' . $half);
                 $st->execute([$gid, $around]);
                 $rows = array_merge($before, $st->fetchAll());
+            } elseif ($before > 0) {
+                // 往上翻: 取比 before_id 更早的一页 (先按 id 倒序取 limit 条, 再反转成正序返回)
+                $st = db()->prepare($sql . ' AND m.id < ? ORDER BY m.id DESC LIMIT ' . $limit);
+                $st->execute([$gid, $before]);
+                $rows = array_reverse($st->fetchAll());
             } elseif ($after > 0) {
                 $st = db()->prepare($sql . ' AND m.id > ? ORDER BY m.id ASC LIMIT ' . $limit);
                 $st->execute([$gid, $after]);
@@ -656,9 +668,19 @@ try {
             // 未读定位: 返回「第一条未读消息 id」和未读条数, 客户端据此把列表初始化到那里并高亮;
             // 读取本身不改已读位置, 由客户端展示完后调 social_read 标记 (避免刷新一下就误标已读)
             $unread = my_unread_map();
+            // 是否还有更早的消息: 客户端上滑到顶时用它决定还要不要继续请求
+            $firstId = 0;
+            foreach ($rows as $r0) { $firstId = (int)$r0['id']; break; }
+            $hasMoreBefore = false;
+            if ($firstId > 0) {
+                $st = db()->prepare('SELECT COUNT(*) FROM social_messages WHERE group_id = ? AND id < ?');
+                $st->execute([$gid, $firstId]);
+                $hasMoreBefore = ((int)$st->fetchColumn()) > 0;
+            }
             json_out([
                 'list'            => array_map('social_msg_public', $rows),
                 'has_more'        => count($rows) >= $limit,
+                'has_more_before' => $hasMoreBefore,
                 'unread'          => (int)($unread[$gid]['count'] ?? 0),
                 'first_unread_id' => (int)($unread[$gid]['first_id'] ?? 0),
                 'my_id'           => (int)$me['id'],
@@ -922,6 +944,92 @@ try {
             json_out(['user_id' => $uid, 'group_id' => $gid, 'removed' => $n]);
 
         // ============ 消息通知 ============
+        // ============ 抽奖 (客户端) ============
+        case 'lottery_info':
+            $me = current_user_or_401();
+            $cfg = lottery_config();
+            $st = db()->prepare("SELECT p.id, p.name, p.card_type,
+                    (SELECT COUNT(*) FROM lottery_codes c WHERE c.prize_id = p.id AND c.user_id = 0) AS left_cnt
+                FROM lottery_prizes p WHERE p.is_active = 1 ORDER BY p.sort_order ASC, p.id ASC");
+            $st->execute();
+            $prizes = [];
+            foreach ($st->fetchAll() as $p) {
+                $leftCnt = (int)$p['left_cnt'];
+                if ($leftCnt <= 0) continue;
+                $prizes[] = [
+                    'id' => (int)$p['id'], 'name' => (string)$p['name'],
+                    'card_type' => (string)$p['card_type'], 'left' => $leftCnt,
+                ];
+            }
+            $st = db()->prepare('SELECT d.id, d.prize_id, d.code, d.created_at, p.name AS prize_name, p.card_type
+                FROM lottery_draws d LEFT JOIN lottery_prizes p ON p.id = d.prize_id
+                WHERE d.user_id = ? ORDER BY d.id DESC LIMIT 20');
+            $st->execute([(int)$me['id']]);
+            $records = [];
+            foreach ($st->fetchAll() as $r) {
+                $records[] = [
+                    'id' => (int)$r['id'], 'prize_id' => (int)$r['prize_id'],
+                    'prize_name' => (string)($r['prize_name'] ?? ''), 'card_type' => (string)($r['card_type'] ?? ''),
+                    'code' => (string)$r['code'], 'created_at' => (string)$r['created_at'],
+                ];
+            }
+            json_out([
+                'enabled'        => (int)$cfg['enabled'],
+                'title'          => (string)$cfg['title'],
+                'content'        => (string)$cfg['content'],
+                'per_user_limit' => (int)$cfg['per_user_limit'],
+                'my_quota'       => lottery_left_for($me),
+                'my_drawn'       => lottery_drawn_count((int)$me['id']),
+                'prizes'         => $prizes,
+                'records'        => $records,
+            ]);
+
+        case 'lottery_draw':
+            $me = current_user_or_401();
+            $cfg = lottery_config();
+            if ((int)$cfg['enabled'] !== 1) json_error('抽奖活动已关闭');
+            if (lottery_left_for($me) <= 0) json_error('你的抽奖次数已用完');
+            $got = lottery_draw_once((int)$me['id']);
+            try {
+                db()->prepare('INSERT INTO notifications (user_id, title, content, type, link, is_read) VALUES (?, ?, ?, ?, ?, 0)')
+                    ->execute([
+                        (int)$me['id'],
+                        '恭喜抽中 ' . $got['prize_name'],
+                        "你的卡密: " . $got['code'] . "\n(长按可复制, 也可以随时在「我的 → 消息中心」查看)",
+                        'lottery',
+                        '',
+                    ]);
+            } catch (Exception $e) { error_log('[lottery notify] ' . $e->getMessage()); }
+            json_out([
+                'draw_id'    => (int)$got['id'],
+                'prize_id'   => (int)$got['prize_id'],
+                'prize_name' => (string)$got['prize_name'],
+                'card_type'  => (string)$got['card_type'],
+                'code'       => (string)$got['code'],
+                'left'       => lottery_left_for($me),
+            ]);
+
+        case 'lottery_records':
+            $me = current_user_or_401();
+            $page = max(1, (int)param('page', 1));
+            $ps = min(50, max(1, (int)param('page_size', 20)));
+            $st = db()->prepare('SELECT COUNT(*) FROM lottery_draws WHERE user_id = ?');
+            $st->execute([(int)$me['id']]);
+            $total = (int)$st->fetchColumn();
+            $st = db()->prepare('SELECT d.id, d.prize_id, d.code, d.created_at, p.name AS prize_name, p.card_type
+                FROM lottery_draws d LEFT JOIN lottery_prizes p ON p.id = d.prize_id
+                WHERE d.user_id = ? ORDER BY d.id DESC LIMIT ' . $ps . ' OFFSET ' . (($page - 1) * $ps));
+            $st->execute([(int)$me['id']]);
+            $list = [];
+            foreach ($st->fetchAll() as $r) {
+                $list[] = [
+                    'id' => (int)$r['id'], 'prize_id' => (int)$r['prize_id'],
+                    'prize_name' => (string)($r['prize_name'] ?? ''), 'card_type' => (string)($r['card_type'] ?? ''),
+                    'code' => (string)$r['code'], 'created_at' => (string)$r['created_at'],
+                ];
+            }
+            json_out(['list' => $list, 'total' => $total, 'page' => $page, 'page_size' => $ps]);
+
         case 'notifications':
             $me = current_user_or_401();
             $page = max(1, (int)param('page', 1));
@@ -1124,6 +1232,246 @@ try {
             }
             db()->prepare('DELETE FROM notifications WHERE id = ?')->execute([$id]);
             json_out(['ok' => true]);
+
+        // ============ 后台: 抽奖管理 ============
+        case 'admin_lottery_prizes':
+            require_admin();
+            $rows = db()->query("SELECT p.*,
+                    (SELECT COUNT(*) FROM lottery_codes c WHERE c.prize_id = p.id) AS total_cnt,
+                    (SELECT COUNT(*) FROM lottery_codes c WHERE c.prize_id = p.id AND c.user_id > 0) AS used_cnt
+                FROM lottery_prizes p ORDER BY p.sort_order ASC, p.id ASC")->fetchAll();
+            $list = [];
+            foreach ($rows as $r) {
+                $list[] = [
+                    'id' => (int)$r['id'], 'name' => (string)$r['name'], 'card_type' => (string)$r['card_type'],
+                    'description' => (string)($r['description'] ?? ''), 'sort_order' => (int)$r['sort_order'],
+                    'is_active' => (int)$r['is_active'], 'total' => (int)$r['total_cnt'],
+                    'used' => (int)$r['used_cnt'], 'left' => (int)$r['total_cnt'] - (int)$r['used_cnt'],
+                    'created_at' => (string)$r['created_at'],
+                ];
+            }
+            json_out(['list' => $list]);
+
+        case 'admin_lottery_prize_save':
+            require_admin();
+            $id   = (int)param('id', 0);
+            $name = trim((string)param('name', ''));
+            $type = trim((string)param('card_type', '通用'));
+            $desc = trim((string)param('description', ''));
+            $sort = (int)param('sort_order', 0);
+            $act  = (int)param('is_active', 1) === 1 ? 1 : 0;
+            if ($name === '') json_error('奖项名称不能为空');
+            if (mb_strlen($name) > 50) json_error('奖项名称不能超过 50 个字');
+            if ($type === '') $type = '通用';
+            if (mb_strlen($type) > 20) json_error('卡密类型不能超过 20 个字');
+            if ($desc !== '' && mb_strlen($desc) > 255) json_error('描述不能超过 255 个字');
+            $st = db()->prepare('SELECT id FROM lottery_prizes WHERE name = ?');
+            $st->execute([$name]);
+            $dup = (int)($st->fetchColumn() ?: 0);
+            if ($dup > 0 && $dup !== $id) json_error('奖项名称已存在');
+            if ($id > 0) {
+                db()->prepare('UPDATE lottery_prizes SET name = ?, card_type = ?, description = ?, sort_order = ?, is_active = ? WHERE id = ?')
+                    ->execute([$name, $type, $desc, $sort, $act, $id]);
+                json_out(['id' => $id]);
+            }
+            db()->prepare('INSERT INTO lottery_prizes (name, card_type, description, sort_order, is_active) VALUES (?, ?, ?, ?, ?)')
+                ->execute([$name, $type, $desc, $sort, $act]);
+            json_out(['id' => (int)db()->lastInsertId()]);
+
+        case 'admin_lottery_prize_delete':
+            require_admin();
+            $id = (int)param('id', 0);
+            if ($id <= 0) json_error('参数错误');
+            $st = db()->prepare('SELECT COUNT(*) FROM lottery_draws WHERE prize_id = ?');
+            $st->execute([$id]);
+            if ((int)$st->fetchColumn() > 0) json_error('该奖项已有用户中奖, 不能删除');
+            $st = db()->prepare('SELECT COUNT(*) FROM lottery_codes WHERE prize_id = ?');
+            $st->execute([$id]);
+            $n = (int)$st->fetchColumn();
+            db()->prepare('DELETE FROM lottery_codes WHERE prize_id = ?')->execute([$id]);
+            db()->prepare('DELETE FROM lottery_prizes WHERE id = ?')->execute([$id]);
+            json_out(['deleted_codes' => $n]);
+
+        case 'admin_lottery_codes':
+            require_admin();
+            $page = max(1, (int)param('page', 1));
+            $ps = min(100, max(1, (int)param('page_size', 20)));
+            $pid = (int)param('prize_id', 0);
+            $status = (string)param('status', 'all');
+            $kw = trim((string)param('keyword', ''));
+            $where = []; $args = [];
+            if ($pid > 0) { $where[] = 'c.prize_id = ?'; $args[] = $pid; }
+            if ($status === 'unused') { $where[] = 'c.user_id = 0'; }
+            elseif ($status === 'used') { $where[] = 'c.user_id > 0'; }
+            if ($kw !== '') { $where[] = 'c.code LIKE ?'; $args[] = '%' . $kw . '%'; }
+            $cond = $where ? ('WHERE ' . implode(' AND ', $where)) : '';
+            $st = db()->prepare('SELECT COUNT(*) FROM lottery_codes c ' . $cond);
+            $st->execute($args);
+            $total = (int)$st->fetchColumn();
+            $st = db()->prepare("SELECT c.*, p.name AS prize_name, p.card_type, u.nickname, u.username
+                FROM lottery_codes c
+                LEFT JOIN lottery_prizes p ON p.id = c.prize_id
+                LEFT JOIN users u ON u.id = c.user_id
+                " . $cond . ' ORDER BY c.id DESC LIMIT ' . $ps . ' OFFSET ' . (($page - 1) * $ps));
+            $st->execute($args);
+            $list = [];
+            foreach ($st->fetchAll() as $r) {
+                $uid = (int)$r['user_id'];
+                $nn = (string)($r['nickname'] ?? '');
+                $list[] = [
+                    'id' => (int)$r['id'], 'prize_id' => (int)$r['prize_id'],
+                    'prize_name' => (string)($r['prize_name'] ?? ''), 'card_type' => (string)($r['card_type'] ?? ''),
+                    'code' => (string)$r['code'], 'status' => $uid > 0 ? 'used' : 'unused',
+                    'user_id' => $uid,
+                    'user_nickname' => $uid > 0 ? ($nn !== '' ? $nn : (string)($r['username'] ?? '')) : '',
+                    'used_at' => (string)($r['used_at'] ?? ''), 'created_at' => (string)$r['created_at'],
+                ];
+            }
+            $unused = (int)db()->query('SELECT COUNT(*) FROM lottery_codes WHERE user_id = 0')->fetchColumn();
+            $used = (int)db()->query('SELECT COUNT(*) FROM lottery_codes WHERE user_id > 0')->fetchColumn();
+            json_out([
+                'list' => $list, 'total' => $total, 'page' => $page, 'page_size' => $ps,
+                'unused' => $unused, 'used' => $used,
+            ]);
+
+        case 'admin_lottery_codes_import':
+            require_admin();
+            $pid = (int)param('prize_id', 0);
+            $text = (string)param('text', '');
+            if ($pid <= 0) json_error('请选择奖项');
+            $st = db()->prepare('SELECT id FROM lottery_prizes WHERE id = ?');
+            $st->execute([$pid]);
+            if (!$st->fetchColumn()) json_error('奖项不存在');
+            $lines = preg_split('/\r\n|\r|\n/', $text);
+            $added = 0; $dup = 0; $invalid = 0; $seen = [];
+            $ins = db()->prepare('INSERT IGNORE INTO lottery_codes (prize_id, code) VALUES (?, ?)');
+            foreach ($lines as $line) {
+                $code = trim($line);
+                if ($code === '') continue;
+                if (!preg_match('/^[A-Za-z0-9_\-]{6,64}$/', $code)) { $invalid++; continue; }
+                if (isset($seen[$code])) { $dup++; continue; }
+                $seen[$code] = true;
+                $ins->execute([$pid, $code]);
+                if ($ins->rowCount() > 0) $added++; else $dup++;
+            }
+            $st = db()->prepare('SELECT COUNT(*) FROM lottery_codes WHERE prize_id = ? AND user_id = 0');
+            $st->execute([$pid]);
+            json_out(['added' => $added, 'duplicate' => $dup, 'invalid' => $invalid, 'left' => (int)$st->fetchColumn()]);
+
+        case 'admin_lottery_codes_delete':
+            require_admin();
+            $pid = (int)param('prize_id', 0);
+            $status = (string)param('status', 'unused');
+            // 清空未使用卡密时, prize_id = 0 表示「全部奖项」(后台在"全部奖项"筛选下会这样传)
+            if ($pid <= 0 && $status === 'all') json_error('请选择奖项');
+            if ($status === 'all') {
+                // 连已抽出的记录一起清掉 (谨慎操作)
+                $st = db()->prepare('SELECT COUNT(*) FROM lottery_codes WHERE prize_id = ?');
+                $st->execute([$pid]);
+                $n = (int)$st->fetchColumn();
+                db()->prepare('DELETE FROM lottery_draws WHERE prize_id = ?')->execute([$pid]);
+                db()->prepare('DELETE FROM lottery_codes WHERE prize_id = ?')->execute([$pid]);
+                json_out(['deleted' => $n]);
+            }
+            if ($pid > 0) {
+                $st = db()->prepare('DELETE FROM lottery_codes WHERE prize_id = ? AND user_id = 0');
+                $st->execute([$pid]);
+            } else {
+                $st = db()->query('DELETE FROM lottery_codes WHERE user_id = 0');
+            }
+            json_out(['deleted' => $st->rowCount()]);
+
+        case 'admin_lottery_config_get':
+            require_admin();
+            json_out(lottery_config());
+
+        case 'admin_lottery_config_set':
+            require_admin();
+            $old = lottery_config();
+            $enabled = (int)param('enabled', $old['enabled']) === 1 ? 1 : 0;
+            $title = trim((string)param('title', $old['title']));
+            $content = (string)param('content', $old['content']);
+            $limit = (int)param('per_user_limit', $old['per_user_limit']);
+            if (mb_strlen($title) > 50) json_error('抽奖标题不能超过 50 个字');
+            if (mb_strlen($content) > 2000) json_error('抽奖内容不能超过 2000 个字');
+            if ($limit < 0) $limit = 0;
+            if ($limit > 9999) json_error('每人抽奖次数不能超过 9999');
+            lottery_config_save(['enabled' => $enabled, 'title' => $title, 'content' => $content, 'per_user_limit' => $limit]);
+            json_out(lottery_config());
+
+        case 'admin_lottery_draws':
+            require_admin();
+            $page = max(1, (int)param('page', 1));
+            $ps = min(100, max(1, (int)param('page_size', 20)));
+            $pid = (int)param('prize_id', 0);
+            $kw = trim((string)param('keyword', ''));
+            $where = []; $args = [];
+            if ($pid > 0) { $where[] = 'd.prize_id = ?'; $args[] = $pid; }
+            if ($kw !== '') {
+                $where[] = '(d.code LIKE ? OR u.username LIKE ? OR u.nickname LIKE ?)';
+                $like = '%' . $kw . '%';
+                array_push($args, $like, $like, $like);
+            }
+            $cond = $where ? ('WHERE ' . implode(' AND ', $where)) : '';
+            $st = db()->prepare('SELECT COUNT(*) FROM lottery_draws d LEFT JOIN users u ON u.id = d.user_id ' . $cond);
+            $st->execute($args);
+            $total = (int)$st->fetchColumn();
+            $st = db()->prepare('SELECT d.*, u.nickname, u.username, p.name AS prize_name, p.card_type
+                FROM lottery_draws d LEFT JOIN users u ON u.id = d.user_id
+                LEFT JOIN lottery_prizes p ON p.id = d.prize_id
+                ' . $cond . ' ORDER BY d.id DESC LIMIT ' . $ps . ' OFFSET ' . (($page - 1) * $ps));
+            $st->execute($args);
+            $list = [];
+            foreach ($st->fetchAll() as $r) {
+                $nn = (string)($r['nickname'] ?? '');
+                $list[] = [
+                    'id' => (int)$r['id'], 'user_id' => (int)$r['user_id'],
+                    'nickname' => $nn !== '' ? $nn : (string)($r['username'] ?? ''),
+                    'username' => (string)($r['username'] ?? ''),
+                    'prize_name' => (string)($r['prize_name'] ?? ''), 'card_type' => (string)($r['card_type'] ?? ''),
+                    'code' => (string)$r['code'], 'created_at' => (string)$r['created_at'],
+                ];
+            }
+            json_out(['list' => $list, 'total' => $total, 'page' => $page, 'page_size' => $ps]);
+
+        case 'admin_lottery_quota_set':
+            require_admin();
+            $uid = (int)param('user_id', 0);
+            $quota = (int)param('quota', -1);
+            if ($uid <= 0) json_error('参数错误');
+            if ($quota < -1) $quota = -1;
+            if ($quota > 9999) json_error('抽奖次数不能超过 9999');
+            $st = db()->prepare('SELECT * FROM users WHERE id = ?');
+            $st->execute([$uid]);
+            $u = $st->fetch();
+            if (!$u) json_error('用户不存在');
+            db()->prepare('UPDATE users SET lottery_quota = ? WHERE id = ?')->execute([$quota, $uid]);
+            $u['lottery_quota'] = $quota;
+            json_out(['user_id' => $uid, 'quota' => $quota, 'left' => lottery_left_for($u)]);
+
+        case 'admin_lottery_quota_all':
+            require_admin();
+            $quota = (int)param('quota', -1);
+            if ($quota < -1) $quota = -1;
+            if ($quota > 9999) json_error('抽奖次数不能超过 9999');
+            $st = db()->prepare('UPDATE users SET lottery_quota = ?');
+            $st->execute([$quota]);
+            json_out(['updated' => $st->rowCount()]);
+
+        // ============ 后台: 群消息一键清除 ============
+        case 'admin_social_message_clear':
+            require_admin();
+            $gid = (int)param('group_id', 0);
+            $kw = trim((string)param('keyword', ''));
+            $where = []; $args = [];
+            if ($gid > 0) { $where[] = 'group_id = ?'; $args[] = $gid; }
+            if ($kw !== '') { $where[] = 'content LIKE ?'; $args[] = '%' . $kw . '%'; }
+            $cond = $where ? ('WHERE ' . implode(' AND ', $where)) : '';
+            $st = db()->prepare('SELECT COUNT(*) FROM social_messages ' . $cond);
+            $st->execute($args);
+            $n = (int)$st->fetchColumn();
+            if ($n > 0) { db()->prepare('DELETE FROM social_messages ' . $cond)->execute($args); }
+            json_out(['deleted' => $n]);
 
         case 'logout':
             $token = param('token', '');
@@ -2407,4 +2755,95 @@ function notify_push_all(string $title, string $content, string $type = 'admin',
         try { $st->execute([(int)$id, $title, $content, $type, $link]); $n++; } catch (Exception $e) {}
     }
     return $n;
+}
+
+
+// ==================== 抽奖系统辅助函数 ====================
+
+/** 抽奖活动配置 (存在 settings.lottery_config) */
+function lottery_config(): array
+{
+    $cfg = [
+        'enabled'        => 0,
+        'title'          => '免费抽卡密',
+        'content'        => '',
+        'per_user_limit' => 1,
+    ];
+    try {
+        $st = db()->prepare('SELECT `value` FROM `settings` WHERE `key` = ?');
+        $st->execute(['lottery_config']);
+        $raw = (string)($st->fetchColumn() ?: '');
+        if ($raw !== '') {
+            $j = json_decode($raw, true);
+            if (is_array($j)) $cfg = array_merge($cfg, $j);
+        }
+    } catch (Exception $e) { error_log('[lottery_config] ' . $e->getMessage()); }
+    $cfg['enabled'] = ((int)$cfg['enabled'] === 1) ? 1 : 0;
+    $cfg['per_user_limit'] = max(0, (int)$cfg['per_user_limit']);
+    $cfg['title'] = (string)$cfg['title'];
+    $cfg['content'] = (string)$cfg['content'];
+    return $cfg;
+}
+
+/** 保存抽奖活动配置 */
+function lottery_config_save(array $cfg): void
+{
+    $json = json_encode($cfg, JSON_UNESCAPED_UNICODE);
+    db()->prepare('INSERT INTO `settings` (`key`, `value`) VALUES (?, ?) ON DUPLICATE KEY UPDATE `value` = VALUES(`value`)')
+        ->execute(['lottery_config', $json]);
+}
+
+/** 某用户已经抽了几次 */
+function lottery_drawn_count(int $userId): int
+{
+    $st = db()->prepare('SELECT COUNT(*) FROM lottery_draws WHERE user_id = ?');
+    $st->execute([$userId]);
+    return (int)$st->fetchColumn();
+}
+
+/**
+ * 用户还能抽几次。
+ * users.lottery_quota: -1 = 跟随活动默认每人次数; >=0 = 该用户总共可抽的次数(已抽的从里面扣)
+ */
+function lottery_left_for(array $user): int
+{
+    $quota = array_key_exists('lottery_quota', $user) ? (int)$user['lottery_quota'] : -1;
+    if ($quota < 0) $quota = (int)lottery_config()['per_user_limit'];
+    return max(0, $quota - lottery_drawn_count((int)$user['id']));
+}
+
+/**
+ * 抽一次奖: 从「启用的奖项 + 还没被用过的卡密」里随机取一张, 标记为已用并写中奖记录。
+ * 全程在事务里做, 保证同一张卡密不会发给两个人。
+ */
+function lottery_draw_once(int $userId): array
+{
+    $pdo = db();
+    $pdo->beginTransaction();
+    try {
+        $st = $pdo->prepare('SELECT c.id AS code_id, c.code, p.id AS prize_id, p.name AS prize_name, p.card_type
+            FROM lottery_codes c INNER JOIN lottery_prizes p ON p.id = c.prize_id
+            WHERE c.user_id = 0 AND p.is_active = 1
+            ORDER BY RAND() LIMIT 1 FOR UPDATE');
+        $st->execute();
+        $row = $st->fetch();
+        if (!$row) { $pdo->rollBack(); json_error('奖品已抽完, 请稍后再来'); }
+        $pdo->prepare('UPDATE lottery_codes SET user_id = ?, used_at = NOW() WHERE id = ? AND user_id = 0')
+            ->execute([$userId, (int)$row['code_id']]);
+        $pdo->prepare('INSERT INTO lottery_draws (user_id, prize_id, code_id, code, created_at) VALUES (?, ?, ?, ?, NOW())')
+            ->execute([$userId, (int)$row['prize_id'], (int)$row['code_id'], (string)$row['code']]);
+        $drawId = (int)$pdo->lastInsertId();
+        $got = [
+            'id'         => $drawId,
+            'prize_id'   => (int)$row['prize_id'],
+            'prize_name' => (string)$row['prize_name'],
+            'card_type'  => (string)$row['card_type'],
+            'code'       => (string)$row['code'],
+        ];
+        $pdo->commit();
+        return $got;
+    } catch (Exception $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        throw $e;
+    }
 }
