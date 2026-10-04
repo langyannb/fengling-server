@@ -356,9 +356,9 @@ try {
             $active = (string)param('is_active', '');
             $where = []; $args = [];
             if ($kw !== '') {
-                $where[] = '(username LIKE ? OR nickname LIKE ? OR email LIKE ?)';
+                $where[] = '(username LIKE ? OR nickname LIKE ? OR email LIKE ? OR tags LIKE ?)';
                 $like = '%' . $kw . '%';
-                array_push($args, $like, $like, $like);
+                array_push($args, $like, $like, $like, $like);
             }
             if (in_array($role, ['user', 'admin'], true)) { $where[] = 'role = ?'; $args[] = $role; }
             if ($active === '0' || $active === '1') { $where[] = 'is_active = ?'; $args[] = (int)$active; }
@@ -369,7 +369,13 @@ try {
             $st = db()->prepare('SELECT * FROM users' . $wsql . ' ORDER BY id ASC LIMIT ' . (($page - 1) * $size) . ', ' . $size);
             $st->execute($args);
             json_out([
-                'list'      => array_map('user_public', $st->fetchAll()),
+                'list'      => array_map(function ($u) {
+                    $p = user_public($u);
+                    $p['lottery_quota'] = (int)($u['lottery_quota'] ?? -1);
+                    $p['lottery_drawn'] = lottery_drawn_count((int)$u['id']);
+                    $p['lottery_left']  = lottery_left_for($u);
+                    return $p;
+                }, $st->fetchAll()),
                 'total'     => $total,
                 'page'      => $page,
                 'page_size' => $size,
@@ -547,6 +553,258 @@ try {
             json_out(['user' => user_public($st->fetch())]);
 
         // ============ 社交群组 ============
+        // ============ 用户主页 ============
+        case 'user_profile':
+            $me = current_user();
+            $uid = (int)param('user_id', 0);
+            $gidQ = (int)param('group_id', 0);
+            if ($uid <= 0) json_error('参数错误');
+            $st = db()->prepare('SELECT id, username, nickname, avatar, bio, role, created_at, tags FROM users WHERE id = ? AND is_active = 1');
+            $st->execute([$uid]);
+            $u = $st->fetch();
+            if (!$u) json_error('用户不存在');
+            $st = db()->prepare('SELECT COUNT(*) FROM social_messages WHERE user_id = ? AND is_recalled = 0');
+            $st->execute([(int)$u['id']]);
+            $msgCount = (int)$st->fetchColumn();
+            $sameGroups = 0;
+            $convId = 0;
+            $isMe = 0;
+            if ($me) {
+                $isMe = ((int)$me['id'] === (int)$u['id']) ? 1 : 0;
+                $st = db()->prepare('SELECT COUNT(DISTINCT m1.group_id) FROM social_messages m1
+                    INNER JOIN social_messages m2 ON m1.group_id = m2.group_id
+                    WHERE m1.user_id = ? AND m2.user_id = ?');
+                $st->execute([(int)$u['id'], (int)$me['id']]);
+                $sameGroups = (int)$st->fetchColumn();
+                if (!$isMe) $convId = pm_conv_id((int)$me['id'], (int)$u['id'], false);
+            }
+            // 禁言状态: 传了 group_id 就看本群, 否则看全站 (group_id = 0)
+            $muteState = user_mute_state((int)$u['id'], $gidQ);
+            $globalMute = $gidQ === 0 ? $muteState : user_mute_state((int)$u['id'], 0);
+            $isAdminMe = ($me && (($me['role'] ?? '') === 'admin')) ? 1 : 0;
+            $canMute = ($isAdminMe && !$isMe && (($u['role'] ?? '') !== 'admin')) ? 1 : 0;
+            json_out([
+                'id'            => (int)$u['id'],
+                'username'      => (string)$u['username'],
+                'nickname'      => (string)(((string)($u['nickname'] ?? '')) !== '' ? $u['nickname'] : $u['username']),
+                'avatar'        => (string)($u['avatar'] ?? ''),
+                'bio'           => (string)($u['bio'] ?? ''),
+                'role'          => (string)($u['role'] ?? 'user'),
+                'created_at'    => (string)($u['created_at'] ?? ''),
+                'message_count' => $msgCount,
+                'same_groups'   => $sameGroups,
+                'is_me'         => $isMe,
+                'can_chat'      => ($me && !$isMe) ? 1 : 0,
+                'conv_id'       => $convId,
+                'tags'          => user_tags_arr($u),
+                'group_id'      => $gidQ,
+                'muted'         => $muteState ? 1 : 0,
+                'mute_left'     => $muteState ? mute_left_text($muteState) : '',
+                'mute_reason'   => $muteState ? (string)($muteState['reason'] ?? '') : '',
+                'global_muted'  => $globalMute ? 1 : 0,
+                'global_mute_left' => $globalMute ? mute_left_text($globalMute) : '',
+                'global_mute_reason' => $globalMute ? (string)($globalMute['reason'] ?? '') : '',
+                'is_admin_me'   => $isAdminMe,
+                'can_mute'      => $canMute,
+            ]);
+
+        // ============ 私聊 ============
+        case 'pm_conversations':
+            $me = current_user_or_401();
+            $meId = (int)$me['id'];
+            $unreadMap = pm_unread_map();
+            $st = db()->prepare('SELECT c.*,
+                    ua.id AS a_id, ua.username AS a_username, ua.nickname AS a_nickname, ua.avatar AS a_avatar, ua.tags AS a_tags,
+                    ub.id AS b_id, ub.username AS b_username, ub.nickname AS b_nickname, ub.avatar AS b_avatar, ub.tags AS b_tags
+                FROM social_pms c
+                INNER JOIN users ua ON ua.id = c.user_a
+                INNER JOIN users ub ON ub.id = c.user_b
+                WHERE c.user_a = ? OR c.user_b = ?
+                ORDER BY c.last_message_id DESC, c.id DESC LIMIT 200');
+            $st->execute([$meId, $meId]);
+            $list = [];
+            foreach ($st->fetchAll() as $c) {
+                if ((int)$c['user_a'] === $meId) {
+                    $other = ['id' => $c['b_id'], 'username' => $c['b_username'], 'nickname' => $c['b_nickname'], 'avatar' => $c['b_avatar'], 'tags' => $c['b_tags']];
+                } else {
+                    $other = ['id' => $c['a_id'], 'username' => $c['a_username'], 'nickname' => $c['a_nickname'], 'avatar' => $c['a_avatar'], 'tags' => $c['a_tags']];
+                }
+                $cid = (int)$c['id'];
+                $lastMsg = null;
+                if ((int)$c['last_message_id'] > 0) {
+                    $sm = db()->prepare('SELECT * FROM social_pm_messages WHERE id = ?');
+                    $sm->execute([(int)$c['last_message_id']]);
+                    $row = $sm->fetch();
+                    if ($row) $lastMsg = pm_msg_public($row, $meId);
+                }
+                $list[] = [
+                    'conv_id'   => $cid,
+                    'user'      => user_brief($other),
+                    'last'      => $lastMsg,
+                    'last_time' => (string)($c['last_at'] ?? ''),
+                    'unread'    => (int)($unreadMap[$cid]['count'] ?? 0),
+                    'first_unread_id' => (int)($unreadMap[$cid]['first_id'] ?? 0),
+                ];
+            }
+            $totalUnread = 0;
+            foreach ($unreadMap as $v) { $totalUnread += (int)$v['count']; }
+            json_out(['list' => $list, 'total_unread' => $totalUnread]);
+
+        case 'pm_messages':
+            $me = current_user_or_401();
+            $meId = (int)$me['id'];
+            $cid = (int)param('conv_id', 0);
+            $otherId = (int)param('user_id', 0);
+            if ($cid <= 0 && $otherId > 0) $cid = pm_conv_id($meId, $otherId, false);
+            if ($cid <= 0) {
+                json_out(['conv_id' => 0, 'other' => null, 'list' => [], 'has_more_before' => 0,
+                    'unread' => 0, 'first_unread_id' => 0, 'my_id' => $meId]);
+            }
+            $st = db()->prepare('SELECT * FROM social_pms WHERE id = ?');
+            $st->execute([$cid]);
+            $conv = $st->fetch();
+            if (!$conv || ((int)$conv['user_a'] !== $meId && (int)$conv['user_b'] !== $meId)) json_error('会话不存在');
+            $otherId = pm_other_id($conv, $meId);
+            $st = db()->prepare('SELECT id, username, nickname, avatar, bio, role, created_at, tags FROM users WHERE id = ?');
+            $st->execute([$otherId]);
+            $o = $st->fetch() ?: [];
+            $limit = min(50, max(1, (int)param('limit', 30)));
+            $before = (int)param('before_id', 0);
+            $after = (int)param('after_id', 0);
+            $around = (int)param('around_id', 0);
+            if ($around > 0) {
+                $st = db()->prepare('SELECT * FROM social_pm_messages WHERE conv_id = ? AND id <= ? ORDER BY id DESC LIMIT ' . $limit);
+                $st->execute([$cid, $around]);
+                $rows = array_reverse($st->fetchAll());
+            } elseif ($before > 0) {
+                $st = db()->prepare('SELECT * FROM social_pm_messages WHERE conv_id = ? AND id < ? ORDER BY id DESC LIMIT ' . $limit);
+                $st->execute([$cid, $before]);
+                $rows = array_reverse($st->fetchAll());
+            } elseif ($after > 0) {
+                $st = db()->prepare('SELECT * FROM social_pm_messages WHERE conv_id = ? AND id > ? ORDER BY id ASC LIMIT ' . $limit);
+                $st->execute([$cid, $after]);
+                $rows = $st->fetchAll();
+            } else {
+                $st = db()->prepare('SELECT * FROM social_pm_messages WHERE conv_id = ? ORDER BY id DESC LIMIT ' . $limit);
+                $st->execute([$cid]);
+                $rows = array_reverse($st->fetchAll());
+            }
+            $firstId = $rows ? (int)$rows[0]['id'] : 0;
+            $hasMore = 0;
+            if ($firstId > 0) {
+                $st = db()->prepare('SELECT COUNT(*) FROM social_pm_messages WHERE conv_id = ? AND id < ?');
+                $st->execute([$cid, $firstId]);
+                $hasMore = ((int)$st->fetchColumn()) > 0 ? 1 : 0;
+            }
+            $unreadMap = pm_unread_map();
+            json_out([
+                'conv_id'  => $cid,
+                'other'    => [
+                    'id'         => (int)($o['id'] ?? $otherId),
+                    'username'   => (string)($o['username'] ?? ''),
+                    'nickname'   => (string)(((string)($o['nickname'] ?? '')) !== '' ? $o['nickname'] : ($o['username'] ?? '')),
+                    'avatar'     => (string)($o['avatar'] ?? ''),
+                    'bio'        => (string)($o['bio'] ?? ''),
+                    'role'       => (string)($o['role'] ?? 'user'),
+                    'created_at' => (string)($o['created_at'] ?? ''),
+                    'tags'       => user_tags_arr($o),
+                ],
+                'list'     => array_map(function ($m) use ($meId) { return pm_msg_public($m, $meId); }, $rows),
+                'has_more_before' => $hasMore,
+                'unread'   => (int)($unreadMap[$cid]['count'] ?? 0),
+                'first_unread_id' => (int)($unreadMap[$cid]['first_id'] ?? 0),
+                'my_id'    => $meId,
+            ]);
+
+        case 'pm_send':
+            $me = current_user_or_401();
+            if ((int)$me['is_active'] !== 1) json_error('你已被封禁', 403);
+            $meId = (int)$me['id'];
+            $toId = (int)param('to_user', 0);
+            $cid = (int)param('conv_id', 0);
+            if ($toId <= 0 && $cid > 0) {
+                $st = db()->prepare('SELECT * FROM social_pms WHERE id = ?');
+                $st->execute([$cid]);
+                $conv = $st->fetch();
+                if (!$conv || ((int)$conv['user_a'] !== $meId && (int)$conv['user_b'] !== $meId)) json_error('会话不存在');
+                $toId = pm_other_id($conv, $meId);
+            }
+            if ($toId <= 0) json_error('参数错误');
+            if ($toId === $meId) json_error('不能给自己发私聊');
+            // 全站禁言对私聊同样生效 (管理员不受限)
+            if (($me['role'] ?? '') !== 'admin') {
+                $muteState = user_mute_state($meId, 0);
+                if ($muteState) {
+                    $leftTxt = mute_left_text($muteState);
+                    $why = trim((string)($muteState['reason'] ?? ''));
+                    json_error('你已被禁言' . ($leftTxt !== '' ? ' (' . $leftTxt . ')' : '')
+                        . ($why !== '' ? ', 原因: ' . $why : ''), 403);
+                }
+            }
+            $st = db()->prepare('SELECT id, username, nickname, avatar FROM users WHERE id = ? AND is_active = 1');
+            $st->execute([$toId]);
+            $target = $st->fetch();
+            if (!$target) json_error('对方不存在或已被封禁');
+            $content = trim((string)param('content', ''));
+            $image = trim((string)param('image', ''));
+            if ($image !== '' && strpos($image, S3_PUBLIC_URL . '/chat/') !== 0) json_error('图片地址不合法');
+            $imgW = max(0, (int)param('image_w', 0));
+            $imgH = max(0, (int)param('image_h', 0));
+            if ($content === '' && $image === '') json_error('消息内容不能为空');
+            if (mb_strlen($content) > 500) json_error('消息不能超过 500 个字');
+            $cid = pm_conv_id($meId, $toId, true);
+            if ($cid <= 0) json_error('会话创建失败, 请稍后重试');
+            $st = db()->prepare('SELECT created_at FROM social_pm_messages WHERE from_user = ? ORDER BY id DESC LIMIT 1');
+            $st->execute([$meId]);
+            $lastAt = $st->fetchColumn();
+            if ($lastAt && strtotime($lastAt) > time() - 2) json_error('发送太快了, 请稍后再试');
+            db()->prepare('INSERT INTO social_pm_messages (conv_id, from_user, to_user, content, image, image_w, image_h, is_recalled)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 0)')->execute([$cid, $meId, $toId, $content, $image, $imgW, $imgH]);
+            $mid = (int)db()->lastInsertId();
+            db()->prepare('UPDATE social_pms SET last_message_id = ?, last_at = NOW() WHERE id = ?')->execute([$mid, $cid]);
+            $myName = (string)(((string)($me['nickname'] ?? '')) !== '' ? $me['nickname'] : ($me['username'] ?? ''));
+            $brief = $content !== '' ? mb_substr($content, 0, 60) : '[图片]';
+            notify_merge($toId, $myName . ' 给你发来私聊', $brief, 'pm', 'pm:' . $cid . ':' . $mid);
+            json_out(['id' => $mid, 'conv_id' => $cid, 'created_at' => date('Y-m-d H:i:s')]);
+
+        case 'pm_read':
+            $me = current_user_or_401();
+            $meId = (int)$me['id'];
+            $cid = (int)param('conv_id', 0);
+            if ($cid <= 0) json_error('参数错误');
+            $st = db()->prepare('SELECT * FROM social_pms WHERE id = ?');
+            $st->execute([$cid]);
+            $conv = $st->fetch();
+            if (!$conv || ((int)$conv['user_a'] !== $meId && (int)$conv['user_b'] !== $meId)) json_error('会话不存在');
+            $lastId = (int)param('last_id', 0);
+            if ($lastId <= 0) {
+                $st = db()->prepare('SELECT COALESCE(MAX(id), 0) FROM social_pm_messages WHERE conv_id = ?');
+                $st->execute([$cid]);
+                $lastId = (int)$st->fetchColumn();
+            }
+            db()->prepare('INSERT INTO social_pm_reads (user_id, conv_id, last_read_id, updated_at) VALUES (?, ?, ?, NOW())
+                ON DUPLICATE KEY UPDATE last_read_id = GREATEST(last_read_id, VALUES(last_read_id)), updated_at = NOW()')
+                ->execute([$meId, $cid, $lastId]);
+            $st = db()->prepare('SELECT last_read_id FROM social_pm_reads WHERE user_id = ? AND conv_id = ?');
+            $st->execute([$meId, $cid]);
+            json_out(['ok' => true, 'conv_id' => $cid, 'last_read_id' => (int)$st->fetchColumn()]);
+
+        case 'pm_recall':
+            $me = current_user_or_401();
+            $id = (int)param('id', 0);
+            $st = db()->prepare('SELECT * FROM social_pm_messages WHERE id = ?');
+            $st->execute([$id]);
+            $m = $st->fetch();
+            if (!$m) json_error('消息不存在');
+            if ((int)$m['is_recalled'] === 1) json_error('消息已经撤回了');
+            $isAdmin = ($me['role'] ?? '') === 'admin';
+            $mine = (int)$m['from_user'] === (int)$me['id'];
+            if (!$isAdmin && !$mine) json_error('没有权限撤回这条消息', 403);
+            if (!$isAdmin && strtotime((string)$m['created_at']) < time() - 300) json_error('只能撤回 5 分钟内的消息');
+            db()->prepare('UPDATE social_pm_messages SET is_recalled = 1, recalled_by = ?, recalled_at = NOW() WHERE id = ?')
+                ->execute([(int)$me['id'], $id]);
+            json_out(['ok' => true]);
+
         case 'social_groups':
             $rows = db()->query("SELECT g.*,
                     (SELECT COUNT(DISTINCT m.user_id) FROM social_messages m WHERE m.group_id = g.id) AS member_count,
@@ -554,13 +812,17 @@ try {
                 FROM social_groups g WHERE g.is_active = 1 ORDER BY g.sort_order ASC, g.id ASC")->fetchAll();
             $muted = my_muted_ids();
             $unread = my_unread_map();
-            json_out(['list' => array_map(function ($g) use ($muted, $unread) {
+            $mentions = my_mention_map();
+            $lasts = group_last_messages(array_map(function ($g) { return (int)$g['id']; }, $rows));
+            json_out(['list' => array_map(function ($g) use ($muted, $unread, $mentions, $lasts) {
                 $gid = (int)$g['id'];
                 return social_group_public(
                     $g,
                     isset($muted[$gid]) ? 1 : 0,
                     (int)($unread[$gid]['count'] ?? 0),
-                    (int)($unread[$gid]['first_id'] ?? 0)
+                    (int)($unread[$gid]['first_id'] ?? 0),
+                    $lasts[$gid] ?? null,
+                    $mentions[$gid] ?? []
                 );
             }, $rows)]);
 
@@ -573,12 +835,16 @@ try {
             $g['member_count'] = (int)($st2->fetch()['c'] ?? 0);
             $muted = my_muted_ids();
             $unread = my_unread_map();
+            $mentions = my_mention_map();
+            $lasts = group_last_messages([$gid]);
             json_out([
                 'group'  => social_group_public(
                     $g,
                     isset($muted[$gid]) ? 1 : 0,
                     (int)($unread[$gid]['count'] ?? 0),
-                    (int)($unread[$gid]['first_id'] ?? 0)
+                    (int)($unread[$gid]['first_id'] ?? 0),
+                    $lasts[$gid] ?? null,
+                    $mentions[$gid] ?? []
                 ),
                 'notice' => (string)($g['notice'] ?? ''),
                 'admins' => $st->fetchAll(),
@@ -588,10 +854,11 @@ try {
             $me = current_user_or_401();
             $gid = (int)param('group_id', 0);
             $after = (int)param('after_id', 0);
+            $before = (int)param('before_id', 0);
             $around = (int)param('around_id', 0);
             $limit = min(50, max(1, (int)param('limit', 30)));
             social_group_or_404($gid, false);
-            $sql = "SELECT m.*, u.nickname, u.username, u.avatar, u.role
+            $sql = "SELECT m.*, u.nickname, u.username, u.avatar, u.role, u.tags
                     FROM social_messages m LEFT JOIN users u ON u.id = m.user_id
                     WHERE m.group_id = ?";
             if ($around > 0) {
@@ -603,6 +870,11 @@ try {
                 $st = db()->prepare($sql . ' AND m.id > ? ORDER BY m.id ASC LIMIT ' . $half);
                 $st->execute([$gid, $around]);
                 $rows = array_merge($before, $st->fetchAll());
+            } elseif ($before > 0) {
+                // 往上翻: 取比 before_id 更早的一页 (先按 id 倒序取 limit 条, 再反转成正序返回)
+                $st = db()->prepare($sql . ' AND m.id < ? ORDER BY m.id DESC LIMIT ' . $limit);
+                $st->execute([$gid, $before]);
+                $rows = array_reverse($st->fetchAll());
             } elseif ($after > 0) {
                 $st = db()->prepare($sql . ' AND m.id > ? ORDER BY m.id ASC LIMIT ' . $limit);
                 $st->execute([$gid, $after]);
@@ -656,9 +928,19 @@ try {
             // 未读定位: 返回「第一条未读消息 id」和未读条数, 客户端据此把列表初始化到那里并高亮;
             // 读取本身不改已读位置, 由客户端展示完后调 social_read 标记 (避免刷新一下就误标已读)
             $unread = my_unread_map();
+            // 是否还有更早的消息: 客户端上滑到顶时用它决定还要不要继续请求
+            $firstId = 0;
+            foreach ($rows as $r0) { $firstId = (int)$r0['id']; break; }
+            $hasMoreBefore = false;
+            if ($firstId > 0) {
+                $st = db()->prepare('SELECT COUNT(*) FROM social_messages WHERE group_id = ? AND id < ?');
+                $st->execute([$gid, $firstId]);
+                $hasMoreBefore = ((int)$st->fetchColumn()) > 0;
+            }
             json_out([
                 'list'            => array_map('social_msg_public', $rows),
                 'has_more'        => count($rows) >= $limit,
+                'has_more_before' => $hasMoreBefore,
                 'unread'          => (int)($unread[$gid]['count'] ?? 0),
                 'first_unread_id' => (int)($unread[$gid]['first_id'] ?? 0),
                 'my_id'           => (int)$me['id'],
@@ -793,6 +1075,15 @@ try {
             }
             json_out(['id' => $mid, 'at_all' => $atAll ? 1 : 0, 'quote_id' => $quoteId, 'created_at' => date('Y-m-d H:i:s')]);
 
+        // ============ SSE 实时消息推送 (契约 A1~A4) ============
+        // 未登录: 先返回普通 JSON 401, 不进流模式 (契约 A1)
+        case 'stream':
+            $me = current_user();
+            if (!$me) json_error('登录已失效', 401);
+            // case 里只做鉴权和取参数, 流循环逻辑全部在 sse_run() 里 (便于 review)
+            sse_run($me, (int)param('pm_id', 0), (int)param('group_id', 0));
+            exit;
+
         case 'social_recall':
             $me = current_user_or_401();
             $id = (int)param('id', 0);
@@ -846,7 +1137,7 @@ try {
             $me = current_user_or_401();
             $gid = (int)param('group_id', 0);
             social_group_or_404($gid, false);
-            $st = db()->prepare("SELECT DISTINCT u.id, u.nickname, u.username, u.avatar, u.role
+            $st = db()->prepare("SELECT DISTINCT u.id, u.nickname, u.username, u.avatar, u.role, u.tags
                     FROM users u
                     WHERE u.is_active = 1 AND u.id <> ? AND (
                         u.role = 'admin'
@@ -867,6 +1158,7 @@ try {
                     'muted' => $mu ? 1 : 0,
                     'mute_left' => $mu ? mute_left_text($mu) : '',
                     'mute_reason' => $mu ? (string)($mu['reason'] ?? '') : '',
+                    'tags' => user_tags_arr($u),
                 ];
             }
             json_out(['list' => $list]);
@@ -922,6 +1214,96 @@ try {
             json_out(['user_id' => $uid, 'group_id' => $gid, 'removed' => $n]);
 
         // ============ 消息通知 ============
+        // ============ 抽奖 (客户端) ============
+        case 'lottery_info':
+            $me = current_user_or_401();
+            $cfg = lottery_config();
+            $st = db()->prepare("SELECT p.id, p.name, p.card_type,
+                    (SELECT COUNT(*) FROM lottery_codes c WHERE c.prize_id = p.id AND c.user_id = 0) AS left_cnt
+                FROM lottery_prizes p WHERE p.is_active = 1 ORDER BY p.sort_order ASC, p.id ASC");
+            $st->execute();
+            $prizes = [];
+            foreach ($st->fetchAll() as $p) {
+                $leftCnt = (int)$p['left_cnt'];
+                if ($leftCnt <= 0) continue;
+                $prizes[] = [
+                    'id' => (int)$p['id'], 'name' => (string)$p['name'],
+                    'card_type' => (string)$p['card_type'], 'left' => $leftCnt,
+                ];
+            }
+            $st = db()->prepare('SELECT d.id, d.prize_id, d.code, d.created_at, p.name AS prize_name, p.card_type
+                FROM lottery_draws d LEFT JOIN lottery_prizes p ON p.id = d.prize_id
+                WHERE d.user_id = ? ORDER BY d.id DESC LIMIT 20');
+            $st->execute([(int)$me['id']]);
+            $records = [];
+            foreach ($st->fetchAll() as $r) {
+                $records[] = [
+                    'id' => (int)$r['id'], 'prize_id' => (int)$r['prize_id'],
+                    'prize_name' => (string)($r['prize_name'] ?? ''), 'card_type' => (string)($r['card_type'] ?? ''),
+                    'code' => (string)$r['code'], 'created_at' => (string)$r['created_at'],
+                ];
+            }
+            json_out([
+                'enabled'        => (int)$cfg['enabled'],
+                'title'          => (string)$cfg['title'],
+                'content'        => (string)$cfg['content'],
+                'per_user_limit' => (int)$cfg['per_user_limit'],
+                'my_quota'       => lottery_left_for($me),
+                'my_drawn'       => lottery_drawn_count((int)$me['id']),
+                'daily_limit'    => (int)$cfg['daily_limit'],
+                'my_today_drawn' => lottery_drawn_count_today((int)$me['id']),
+                'my_today_left'  => lottery_daily_left_for($me),
+                'prizes'         => $prizes,
+                'records'        => $records,
+            ]);
+
+        case 'lottery_draw':
+            $me = current_user_or_401();
+            $cfg = lottery_config();
+            if ((int)$cfg['enabled'] !== 1) json_error('抽奖活动已关闭');
+            if (lottery_daily_left_for($me) === 0) json_error('今天的抽奖次数已用完, 明天再来');
+            if (lottery_left_for($me) <= 0) json_error('你的抽奖次数已用完');
+            $got = lottery_draw_once((int)$me['id']);
+            try {
+                db()->prepare('INSERT INTO notifications (user_id, title, content, type, link, is_read) VALUES (?, ?, ?, ?, ?, 0)')
+                    ->execute([
+                        (int)$me['id'],
+                        '恭喜抽中 ' . $got['prize_name'],
+                        "你的卡密: " . $got['code'] . "\n(长按可复制, 也可以随时在「我的 → 消息中心」查看)",
+                        'lottery',
+                        '',
+                    ]);
+            } catch (Exception $e) { error_log('[lottery notify] ' . $e->getMessage()); }
+            json_out([
+                'draw_id'    => (int)$got['id'],
+                'prize_id'   => (int)$got['prize_id'],
+                'prize_name' => (string)$got['prize_name'],
+                'card_type'  => (string)$got['card_type'],
+                'code'       => (string)$got['code'],
+                'left'       => lottery_left_for($me),
+            ]);
+
+        case 'lottery_records':
+            $me = current_user_or_401();
+            $page = max(1, (int)param('page', 1));
+            $ps = min(50, max(1, (int)param('page_size', 20)));
+            $st = db()->prepare('SELECT COUNT(*) FROM lottery_draws WHERE user_id = ?');
+            $st->execute([(int)$me['id']]);
+            $total = (int)$st->fetchColumn();
+            $st = db()->prepare('SELECT d.id, d.prize_id, d.code, d.created_at, p.name AS prize_name, p.card_type
+                FROM lottery_draws d LEFT JOIN lottery_prizes p ON p.id = d.prize_id
+                WHERE d.user_id = ? ORDER BY d.id DESC LIMIT ' . $ps . ' OFFSET ' . (($page - 1) * $ps));
+            $st->execute([(int)$me['id']]);
+            $list = [];
+            foreach ($st->fetchAll() as $r) {
+                $list[] = [
+                    'id' => (int)$r['id'], 'prize_id' => (int)$r['prize_id'],
+                    'prize_name' => (string)($r['prize_name'] ?? ''), 'card_type' => (string)($r['card_type'] ?? ''),
+                    'code' => (string)$r['code'], 'created_at' => (string)$r['created_at'],
+                ];
+            }
+            json_out(['list' => $list, 'total' => $total, 'page' => $page, 'page_size' => $ps]);
+
         case 'notifications':
             $me = current_user_or_401();
             $page = max(1, (int)param('page', 1));
@@ -1124,6 +1506,485 @@ try {
             }
             db()->prepare('DELETE FROM notifications WHERE id = ?')->execute([$id]);
             json_out(['ok' => true]);
+
+        // ============ 后台: 抽奖管理 ============
+        case 'admin_lottery_prizes':
+            require_admin();
+            $rows = db()->query("SELECT p.*,
+                    (SELECT COUNT(*) FROM lottery_codes c WHERE c.prize_id = p.id) AS total_cnt,
+                    (SELECT COUNT(*) FROM lottery_codes c WHERE c.prize_id = p.id AND c.user_id > 0) AS used_cnt
+                FROM lottery_prizes p ORDER BY p.sort_order ASC, p.id ASC")->fetchAll();
+            $list = [];
+            foreach ($rows as $r) {
+                $list[] = [
+                    'id' => (int)$r['id'], 'name' => (string)$r['name'], 'card_type' => (string)$r['card_type'],
+                    'description' => (string)($r['description'] ?? ''), 'sort_order' => (int)$r['sort_order'],
+                    'is_active' => (int)$r['is_active'], 'total' => (int)$r['total_cnt'],
+                    'used' => (int)$r['used_cnt'], 'left' => (int)$r['total_cnt'] - (int)$r['used_cnt'],
+                    'created_at' => (string)$r['created_at'],
+                ];
+            }
+            json_out(['list' => $list]);
+
+        case 'admin_lottery_prize_save':
+            require_admin();
+            $id   = (int)param('id', 0);
+            $name = trim((string)param('name', ''));
+            $type = trim((string)param('card_type', '通用'));
+            $desc = trim((string)param('description', ''));
+            $sort = (int)param('sort_order', 0);
+            $act  = (int)param('is_active', 1) === 1 ? 1 : 0;
+            if ($name === '') json_error('奖项名称不能为空');
+            if (mb_strlen($name) > 50) json_error('奖项名称不能超过 50 个字');
+            if ($type === '') $type = '通用';
+            if (mb_strlen($type) > 20) json_error('卡密类型不能超过 20 个字');
+            if ($desc !== '' && mb_strlen($desc) > 255) json_error('描述不能超过 255 个字');
+            $st = db()->prepare('SELECT id FROM lottery_prizes WHERE name = ?');
+            $st->execute([$name]);
+            $dup = (int)($st->fetchColumn() ?: 0);
+            if ($dup > 0 && $dup !== $id) json_error('奖项名称已存在');
+            if ($id > 0) {
+                db()->prepare('UPDATE lottery_prizes SET name = ?, card_type = ?, description = ?, sort_order = ?, is_active = ? WHERE id = ?')
+                    ->execute([$name, $type, $desc, $sort, $act, $id]);
+                json_out(['id' => $id]);
+            }
+            db()->prepare('INSERT INTO lottery_prizes (name, card_type, description, sort_order, is_active) VALUES (?, ?, ?, ?, ?)')
+                ->execute([$name, $type, $desc, $sort, $act]);
+            json_out(['id' => (int)db()->lastInsertId()]);
+
+        case 'admin_lottery_prize_delete':
+            require_admin();
+            $id = (int)param('id', 0);
+            if ($id <= 0) json_error('参数错误');
+            $st = db()->prepare('SELECT COUNT(*) FROM lottery_draws WHERE prize_id = ?');
+            $st->execute([$id]);
+            if ((int)$st->fetchColumn() > 0) json_error('该奖项已有用户中奖, 不能删除');
+            $st = db()->prepare('SELECT COUNT(*) FROM lottery_codes WHERE prize_id = ?');
+            $st->execute([$id]);
+            $n = (int)$st->fetchColumn();
+            db()->prepare('DELETE FROM lottery_codes WHERE prize_id = ?')->execute([$id]);
+            db()->prepare('DELETE FROM lottery_prizes WHERE id = ?')->execute([$id]);
+            json_out(['deleted_codes' => $n]);
+
+        case 'admin_lottery_codes':
+            require_admin();
+            $page = max(1, (int)param('page', 1));
+            $ps = min(100, max(1, (int)param('page_size', 20)));
+            $pid = (int)param('prize_id', 0);
+            $status = (string)param('status', 'all');
+            $kw = trim((string)param('keyword', ''));
+            $where = []; $args = [];
+            if ($pid > 0) { $where[] = 'c.prize_id = ?'; $args[] = $pid; }
+            if ($status === 'unused') { $where[] = 'c.user_id = 0'; }
+            elseif ($status === 'used') { $where[] = 'c.user_id > 0'; }
+            if ($kw !== '') { $where[] = 'c.code LIKE ?'; $args[] = '%' . $kw . '%'; }
+            $cond = $where ? ('WHERE ' . implode(' AND ', $where)) : '';
+            $st = db()->prepare('SELECT COUNT(*) FROM lottery_codes c ' . $cond);
+            $st->execute($args);
+            $total = (int)$st->fetchColumn();
+            $st = db()->prepare("SELECT c.*, p.name AS prize_name, p.card_type, u.nickname, u.username
+                FROM lottery_codes c
+                LEFT JOIN lottery_prizes p ON p.id = c.prize_id
+                LEFT JOIN users u ON u.id = c.user_id
+                " . $cond . ' ORDER BY c.id DESC LIMIT ' . $ps . ' OFFSET ' . (($page - 1) * $ps));
+            $st->execute($args);
+            $list = [];
+            foreach ($st->fetchAll() as $r) {
+                $uid = (int)$r['user_id'];
+                $nn = (string)($r['nickname'] ?? '');
+                $list[] = [
+                    'id' => (int)$r['id'], 'prize_id' => (int)$r['prize_id'],
+                    'prize_name' => (string)($r['prize_name'] ?? ''), 'card_type' => (string)($r['card_type'] ?? ''),
+                    'code' => (string)$r['code'], 'status' => $uid > 0 ? 'used' : 'unused',
+                    'user_id' => $uid,
+                    'user_nickname' => $uid > 0 ? ($nn !== '' ? $nn : (string)($r['username'] ?? '')) : '',
+                    'used_at' => (string)($r['used_at'] ?? ''), 'created_at' => (string)$r['created_at'],
+                ];
+            }
+            $unused = (int)db()->query('SELECT COUNT(*) FROM lottery_codes WHERE user_id = 0')->fetchColumn();
+            $used = (int)db()->query('SELECT COUNT(*) FROM lottery_codes WHERE user_id > 0')->fetchColumn();
+            json_out([
+                'list' => $list, 'total' => $total, 'page' => $page, 'page_size' => $ps,
+                'unused' => $unused, 'used' => $used,
+            ]);
+
+        case 'admin_lottery_codes_import':
+            require_admin();
+            $pid = (int)param('prize_id', 0);
+            $text = (string)param('text', '');
+            if ($pid <= 0) json_error('请选择奖项');
+            $st = db()->prepare('SELECT id FROM lottery_prizes WHERE id = ?');
+            $st->execute([$pid]);
+            if (!$st->fetchColumn()) json_error('奖项不存在');
+            $lines = preg_split('/\r\n|\r|\n/', $text);
+            $added = 0; $dup = 0; $invalid = 0; $seen = [];
+            $ins = db()->prepare('INSERT IGNORE INTO lottery_codes (prize_id, code) VALUES (?, ?)');
+            foreach ($lines as $line) {
+                $code = trim($line);
+                if ($code === '') continue;
+                if (!preg_match('/^[A-Za-z0-9_\-]{6,64}$/', $code)) { $invalid++; continue; }
+                if (isset($seen[$code])) { $dup++; continue; }
+                $seen[$code] = true;
+                $ins->execute([$pid, $code]);
+                if ($ins->rowCount() > 0) $added++; else $dup++;
+            }
+            $st = db()->prepare('SELECT COUNT(*) FROM lottery_codes WHERE prize_id = ? AND user_id = 0');
+            $st->execute([$pid]);
+            json_out(['added' => $added, 'duplicate' => $dup, 'invalid' => $invalid, 'left' => (int)$st->fetchColumn()]);
+
+        case 'admin_lottery_codes_delete':
+            require_admin();
+            $pid = (int)param('prize_id', 0);
+            $status = (string)param('status', 'unused');
+            // 清空未使用卡密时, prize_id = 0 表示「全部奖项」(后台在"全部奖项"筛选下会这样传)
+            if ($pid <= 0 && $status === 'all') json_error('请选择奖项');
+            if ($status === 'all') {
+                // 连已抽出的记录一起清掉 (谨慎操作)
+                $st = db()->prepare('SELECT COUNT(*) FROM lottery_codes WHERE prize_id = ?');
+                $st->execute([$pid]);
+                $n = (int)$st->fetchColumn();
+                db()->prepare('DELETE FROM lottery_draws WHERE prize_id = ?')->execute([$pid]);
+                db()->prepare('DELETE FROM lottery_codes WHERE prize_id = ?')->execute([$pid]);
+                json_out(['deleted' => $n]);
+            }
+            if ($pid > 0) {
+                $st = db()->prepare('DELETE FROM lottery_codes WHERE prize_id = ? AND user_id = 0');
+                $st->execute([$pid]);
+            } else {
+                $st = db()->query('DELETE FROM lottery_codes WHERE user_id = 0');
+            }
+            json_out(['deleted' => $st->rowCount()]);
+
+        case 'admin_lottery_config_get':
+            require_admin();
+            json_out(lottery_config());
+
+        case 'admin_lottery_config_set':
+            require_admin();
+            $old = lottery_config();
+            $enabled = (int)param('enabled', $old['enabled']) === 1 ? 1 : 0;
+            $title = trim((string)param('title', $old['title']));
+            $content = (string)param('content', $old['content']);
+            $limit = (int)param('per_user_limit', $old['per_user_limit']);
+            if (mb_strlen($title) > 50) json_error('抽奖标题不能超过 50 个字');
+            if (mb_strlen($content) > 2000) json_error('抽奖内容不能超过 2000 个字');
+            if ($limit < 0) $limit = 0;
+            if ($limit > 9999) json_error('每人抽奖次数不能超过 9999');
+            $daily = (int)param('daily_limit', (int)($old['daily_limit'] ?? 0));
+            if ($daily < 0) $daily = 0;
+            if ($daily > 999) json_error('每日抽奖次数不能超过 999');
+            lottery_config_save(['enabled' => $enabled, 'title' => $title, 'content' => $content, 'per_user_limit' => $limit, 'daily_limit' => $daily]);
+            json_out(lottery_config());
+
+        case 'admin_lottery_draws':
+            require_admin();
+            $page = max(1, (int)param('page', 1));
+            $ps = min(100, max(1, (int)param('page_size', 20)));
+            $pid = (int)param('prize_id', 0);
+            $kw = trim((string)param('keyword', ''));
+            $where = []; $args = [];
+            if ($pid > 0) { $where[] = 'd.prize_id = ?'; $args[] = $pid; }
+            if ($kw !== '') {
+                $where[] = '(d.code LIKE ? OR u.username LIKE ? OR u.nickname LIKE ?)';
+                $like = '%' . $kw . '%';
+                array_push($args, $like, $like, $like);
+            }
+            $cond = $where ? ('WHERE ' . implode(' AND ', $where)) : '';
+            $st = db()->prepare('SELECT COUNT(*) FROM lottery_draws d LEFT JOIN users u ON u.id = d.user_id ' . $cond);
+            $st->execute($args);
+            $total = (int)$st->fetchColumn();
+            $st = db()->prepare('SELECT d.*, u.nickname, u.username, p.name AS prize_name, p.card_type
+                FROM lottery_draws d LEFT JOIN users u ON u.id = d.user_id
+                LEFT JOIN lottery_prizes p ON p.id = d.prize_id
+                ' . $cond . ' ORDER BY d.id DESC LIMIT ' . $ps . ' OFFSET ' . (($page - 1) * $ps));
+            $st->execute($args);
+            $list = [];
+            foreach ($st->fetchAll() as $r) {
+                $nn = (string)($r['nickname'] ?? '');
+                $list[] = [
+                    'id' => (int)$r['id'], 'user_id' => (int)$r['user_id'],
+                    'nickname' => $nn !== '' ? $nn : (string)($r['username'] ?? ''),
+                    'username' => (string)($r['username'] ?? ''),
+                    'prize_name' => (string)($r['prize_name'] ?? ''), 'card_type' => (string)($r['card_type'] ?? ''),
+                    'code' => (string)$r['code'], 'created_at' => (string)$r['created_at'],
+                ];
+            }
+            json_out(['list' => $list, 'total' => $total, 'page' => $page, 'page_size' => $ps]);
+
+        case 'admin_lottery_quota_set':
+            require_admin();
+            $uid = (int)param('user_id', 0);
+            $quota = (int)param('quota', -1);
+            if ($uid <= 0) json_error('参数错误');
+            if ($quota < -1) $quota = -1;
+            if ($quota > 9999) json_error('抽奖次数不能超过 9999');
+            $st = db()->prepare('SELECT * FROM users WHERE id = ?');
+            $st->execute([$uid]);
+            $u = $st->fetch();
+            if (!$u) json_error('用户不存在');
+            db()->prepare('UPDATE users SET lottery_quota = ? WHERE id = ?')->execute([$quota, $uid]);
+            $u['lottery_quota'] = $quota;
+            json_out(['user_id' => $uid, 'quota' => $quota, 'left' => lottery_left_for($u)]);
+
+        // 重置单个用户的抽奖机会: 已抽次数清零(中奖记录保留), 次数立刻恢复
+        case 'admin_lottery_quota_reset':
+            require_admin();
+            $uid = (int)param('user_id', 0);
+            if ($uid <= 0) json_error('参数错误');
+            $st = db()->prepare('SELECT * FROM users WHERE id = ?');
+            $st->execute([$uid]);
+            $u = $st->fetch();
+            if (!$u) json_error('用户不存在');
+            $daily = (int)param('daily', 0) === 1;
+            // 统一用数据库的 NOW() 作为重置标记, 避免 PHP 与 MySQL 时区/秒差不一致
+            $nowDb = (string)db()->query('SELECT NOW()')->fetchColumn();
+            db()->prepare('UPDATE users SET lottery_reset_at = ?' . ($daily ? ', lottery_day_reset_at = ?' : '') . ' WHERE id = ?')
+                ->execute($daily ? [$nowDb, $nowDb, $uid] : [$nowDb, $uid]);
+            $u['lottery_reset_at'] = $nowDb;
+            if ($daily) $u['lottery_day_reset_at'] = $nowDb;
+            json_out([
+                'user_id'     => $uid,
+                'drawn'       => lottery_drawn_count($uid),
+                'today_drawn' => lottery_drawn_count_today($uid),
+                'left'        => lottery_left_for($u),
+            ]);
+
+        // 一键重置所有人的抽奖机会
+        case 'admin_lottery_quota_reset_all':
+            require_admin();
+            $daily = (int)param('daily', 0) === 1;
+            $nowDb = (string)db()->query('SELECT NOW()')->fetchColumn();
+            $st = db()->prepare('UPDATE users SET lottery_reset_at = ?' . ($daily ? ', lottery_day_reset_at = ?' : ''));
+            $st->execute($daily ? [$nowDb, $nowDb] : [$nowDb]);
+            json_out(['updated' => $st->rowCount(), 'daily' => $daily ? 1 : 0]);
+
+        /**
+         * 抽奖活动重置。
+         * mode = quota    只清所有人「总抽奖次数」(中奖记录与已用卡密都保留)
+         * mode = daily    只清所有人「今日已抽次数」(总次数不变, 今天能再抽)
+         * mode = activity 整个活动重开: 删中奖记录 + 所有人总次数与今日次数归零
+         *                 + release_codes=1 把已经发出去的卡密退回卡密池(user_id=0)
+         *                 + clear_notices=1 删掉含卡密的通知, 避免旧卡密还能被看到
+         */
+        case 'admin_lottery_activity_reset':
+            require_admin();
+            $mode = trim((string)param('mode', 'quota'));
+            if (!in_array($mode, ['quota', 'daily', 'activity'], true)) json_error('参数错误');
+            $release = (int)param('release_codes', 1) === 1;
+            $clearNotices = (int)param('clear_notices', 1) === 1;
+            $now = (string)db()->query('SELECT NOW()')->fetchColumn();
+            $res = [
+                'mode' => $mode, 'users' => 0, 'draws_deleted' => 0,
+                'codes_released' => 0, 'notices_deleted' => 0,
+            ];
+            if ($mode === 'daily') {
+                $st = db()->prepare('UPDATE users SET lottery_day_reset_at = ?');
+                $st->execute([$now]);
+                $res['users'] = (int)$st->rowCount();
+                json_out($res);
+            }
+            $st = db()->prepare('UPDATE users SET lottery_reset_at = ?' . ($mode === 'activity' ? ', lottery_day_reset_at = ?' : ''));
+            $st->execute($mode === 'activity' ? [$now, $now] : [$now]);
+            $res['users'] = (int)$st->rowCount();
+            if ($mode === 'activity') {
+                $res['draws_deleted'] = (int)db()->exec('DELETE FROM lottery_draws');
+                if ($release) {
+                    $res['codes_released'] = (int)db()->exec('UPDATE lottery_codes SET user_id = 0, used_at = NULL WHERE user_id <> 0');
+                }
+                if ($clearNotices) {
+                    $res['notices_deleted'] = (int)db()->exec("DELETE FROM notifications WHERE type = 'lottery'");
+                }
+            }
+            json_out($res);
+
+        case 'admin_lottery_quota_all':
+            require_admin();
+            $quota = (int)param('quota', -1);
+            if ($quota < -1) $quota = -1;
+            if ($quota > 9999) json_error('抽奖次数不能超过 9999');
+            $st = db()->prepare('UPDATE users SET lottery_quota = ?');
+            $st->execute([$quota]);
+            json_out(['updated' => $st->rowCount()]);
+
+        // ============ 后台: 私聊管理 ============
+        case 'admin_pm_conversations':
+            require_admin();
+            $page = max(1, (int)param('page', 1));
+            $ps = min(100, max(1, (int)param('page_size', 20)));
+            $kw = trim((string)param('keyword', ''));
+            $where = []; $args = [];
+            if ($kw !== '') {
+                $where[] = '(ua.nickname LIKE ? OR ua.username LIKE ? OR ub.nickname LIKE ? OR ub.username LIKE ?)';
+                $like = '%' . $kw . '%';
+                array_push($args, $like, $like, $like, $like);
+            }
+            $wc = $where ? (' WHERE ' . implode(' AND ', $where)) : '';
+            $cnt = db()->prepare('SELECT COUNT(*) FROM social_pms c
+                INNER JOIN users ua ON ua.id = c.user_a INNER JOIN users ub ON ub.id = c.user_b' . $wc);
+            $cnt->execute($args);
+            $total = (int)$cnt->fetchColumn();
+            $off = ($page - 1) * $ps;
+            $st = db()->prepare('SELECT c.id, c.last_message_id, c.last_at, c.created_at,
+                    ua.id AS a_id, ua.username AS a_username, ua.nickname AS a_nickname, ua.avatar AS a_avatar,
+                    ub.id AS b_id, ub.username AS b_username, ub.nickname AS b_nickname, ub.avatar AS b_avatar,
+                    (SELECT COUNT(*) FROM social_pm_messages m WHERE m.conv_id = c.id) AS message_count,
+                    (SELECT m2.content FROM social_pm_messages m2 WHERE m2.conv_id = c.id ORDER BY m2.id DESC LIMIT 1) AS last_content,
+                    (SELECT m3.image FROM social_pm_messages m3 WHERE m3.conv_id = c.id ORDER BY m3.id DESC LIMIT 1) AS last_image
+                FROM social_pms c
+                INNER JOIN users ua ON ua.id = c.user_a INNER JOIN users ub ON ub.id = c.user_b'
+                . $wc . ' ORDER BY c.last_message_id DESC, c.id DESC LIMIT ' . $off . ', ' . $ps);
+            $st->execute($args);
+            $list = [];
+            foreach ($st->fetchAll() as $c) {
+                $list[] = [
+                    'id'             => (int)$c['id'],
+                    'user_a'         => user_brief(['id' => $c['a_id'], 'username' => $c['a_username'], 'nickname' => $c['a_nickname'], 'avatar' => $c['a_avatar']]),
+                    'user_b'         => user_brief(['id' => $c['b_id'], 'username' => $c['b_username'], 'nickname' => $c['b_nickname'], 'avatar' => $c['b_avatar']]),
+                    'message_count'  => (int)$c['message_count'],
+                    'last_content'   => (string)($c['last_content'] ?? ''),
+                    'last_image'     => (string)($c['last_image'] ?? ''),
+                    'last_at'        => (string)($c['last_at'] ?? ''),
+                    'created_at'     => (string)$c['created_at'],
+                ];
+            }
+            json_out(['list' => $list, 'total' => $total, 'page' => $page, 'page_size' => $ps]);
+
+        case 'admin_pm_messages':
+            require_admin();
+            $cid = (int)param('conv_id', 0);
+            if ($cid <= 0) json_error('参数错误');
+            $st = db()->prepare('SELECT * FROM social_pms WHERE id = ?');
+            $st->execute([$cid]);
+            if (!$st->fetch()) json_error('会话不存在');
+            $page = max(1, (int)param('page', 1));
+            $ps = min(100, max(1, (int)param('page_size', 20)));
+            $kw = trim((string)param('keyword', ''));
+            $where = ['m.conv_id = ?']; $args = [$cid];
+            if ($kw !== '') { $where[] = 'm.content LIKE ?'; $args[] = '%' . $kw . '%'; }
+            $wc = ' WHERE ' . implode(' AND ', $where);
+            $cnt = db()->prepare('SELECT COUNT(*) FROM social_pm_messages m' . $wc);
+            $cnt->execute($args);
+            $total = (int)$cnt->fetchColumn();
+            $off = ($page - 1) * $ps;
+            $st = db()->prepare('SELECT m.*, uf.nickname AS from_nickname, uf.username AS from_username,
+                    ut.nickname AS to_nickname, ut.username AS to_username
+                FROM social_pm_messages m
+                LEFT JOIN users uf ON uf.id = m.from_user
+                LEFT JOIN users ut ON ut.id = m.to_user'
+                . $wc . ' ORDER BY m.id DESC LIMIT ' . $off . ', ' . $ps);
+            $st->execute($args);
+            $list = [];
+            foreach ($st->fetchAll() as $m) {
+                $list[] = [
+                    'id'          => (int)$m['id'],
+                    'conv_id'     => (int)$m['conv_id'],
+                    'from_user'   => (int)$m['from_user'],
+                    'to_user'     => (int)$m['to_user'],
+                    'from_name'   => (string)(((string)($m['from_nickname'] ?? '')) !== '' ? $m['from_nickname'] : ($m['from_username'] ?? '')),
+                    'to_name'     => (string)(((string)($m['to_nickname'] ?? '')) !== '' ? $m['to_nickname'] : ($m['to_username'] ?? '')),
+                    'content'     => (string)($m['content'] ?? ''),
+                    'image'       => (string)($m['image'] ?? ''),
+                    'is_recalled' => (int)$m['is_recalled'],
+                    'created_at'  => (string)$m['created_at'],
+                ];
+            }
+            json_out(['list' => $list, 'total' => $total, 'page' => $page, 'page_size' => $ps]);
+
+        case 'admin_pm_message_delete':
+            require_admin();
+            $id = (int)param('id', 0);
+            if ($id <= 0) json_error('参数错误');
+            $st = db()->prepare('SELECT * FROM social_pm_messages WHERE id = ?');
+            $st->execute([$id]);
+            $m = $st->fetch();
+            if (!$m) json_error('消息不存在');
+            db()->prepare('DELETE FROM social_pm_messages WHERE id = ?')->execute([$id]);
+            $cid = (int)$m['conv_id'];
+            $st = db()->prepare('SELECT COALESCE(MAX(id), 0) FROM social_pm_messages WHERE conv_id = ?');
+            $st->execute([$cid]);
+            $newLast = (int)$st->fetchColumn();
+            $last = '';
+            if ($newLast > 0) {
+                $st = db()->prepare('SELECT created_at FROM social_pm_messages WHERE id = ?');
+                $st->execute([$newLast]);
+                $last = (string)($st->fetchColumn() ?: '');
+            }
+            db()->prepare('UPDATE social_pms SET last_message_id = ?, last_at = ? WHERE id = ?')
+                ->execute([$newLast, ($last !== '' ? $last : null), $cid]);
+            json_out(['ok' => true, 'deleted' => 1]);
+
+        case 'admin_pm_clear':
+            require_admin();
+            $cid = (int)param('conv_id', 0);
+            if ($cid <= 0) json_error('请选择会话');
+            $st = db()->prepare('SELECT COUNT(*) FROM social_pm_messages WHERE conv_id = ?');
+            $st->execute([$cid]);
+            $n = (int)$st->fetchColumn();
+            db()->prepare('DELETE FROM social_pm_messages WHERE conv_id = ?')->execute([$cid]);
+            db()->prepare('UPDATE social_pms SET last_message_id = 0, last_at = NULL WHERE id = ?')->execute([$cid]);
+            json_out(['deleted' => $n]);
+
+        // ============ 后台: 用户标签 ============
+        case 'admin_user_tags_set':
+            require_admin();
+            $uid = (int)param('user_id', 0);
+            if ($uid <= 0) json_error('参数错误');
+            $str = user_tags_str((string)param('tags', ''));
+            $st = db()->prepare('SELECT id FROM users WHERE id = ?');
+            $st->execute([$uid]);
+            if (!$st->fetch()) json_error('用户不存在');
+            db()->prepare('UPDATE users SET tags = ? WHERE id = ?')->execute([$str, $uid]);
+            json_out(['user_id' => $uid, 'tags' => $str === '' ? [] : explode(',', $str)]);
+
+        case 'admin_tags':
+            require_admin();
+            $presets = json_decode(setting_get('user_tag_presets', '[]'), true);
+            if (!is_array($presets)) $presets = [];
+            $used = [];
+            foreach (db()->query('SELECT tags FROM users WHERE tags <> \'\'')->fetchAll() as $r) {
+                foreach (user_tags_arr(['tags' => $r['tags']]) as $t) {
+                    if (!in_array($t, $used, true)) $used[] = $t;
+                }
+            }
+            json_out(['presets' => array_values($presets), 'used' => $used]);
+
+        case 'admin_tag_preset_save':
+            require_admin();
+            $tag = trim((string)param('tag', ''));
+            if ($tag === '') json_error('标签不能为空');
+            if (mb_strlen($tag) > 10) json_error('标签不能超过 10 个字');
+            $presets = json_decode(setting_get('user_tag_presets', '[]'), true);
+            if (!is_array($presets)) $presets = [];
+            if (!in_array($tag, $presets, true)) {
+                if (count($presets) >= 30) json_error('预设标签最多 30 个');
+                $presets[] = $tag;
+            }
+            setting_set('user_tag_presets', json_encode(array_values($presets), JSON_UNESCAPED_UNICODE));
+            json_out(['presets' => array_values($presets)]);
+
+        case 'admin_tag_preset_delete':
+            require_admin();
+            $tag = trim((string)param('tag', ''));
+            $presets = json_decode(setting_get('user_tag_presets', '[]'), true);
+            if (!is_array($presets)) $presets = [];
+            $presets = array_values(array_filter($presets, function ($t) use ($tag) { return (string)$t !== $tag; }));
+            setting_set('user_tag_presets', json_encode($presets, JSON_UNESCAPED_UNICODE));
+            json_out(['presets' => $presets]);
+
+        // ============ 后台: 群消息一键清除 ============
+        case 'admin_social_message_clear':
+            require_admin();
+            $gid = (int)param('group_id', 0);
+            $kw = trim((string)param('keyword', ''));
+            $where = []; $args = [];
+            if ($gid > 0) { $where[] = 'group_id = ?'; $args[] = $gid; }
+            if ($kw !== '') { $where[] = 'content LIKE ?'; $args[] = '%' . $kw . '%'; }
+            $cond = $where ? ('WHERE ' . implode(' AND ', $where)) : '';
+            $st = db()->prepare('SELECT COUNT(*) FROM social_messages ' . $cond);
+            $st->execute($args);
+            $n = (int)$st->fetchColumn();
+            if ($n > 0) { db()->prepare('DELETE FROM social_messages ' . $cond)->execute($args); }
+            json_out(['deleted' => $n]);
 
         case 'logout':
             $token = param('token', '');
@@ -2104,6 +2965,7 @@ function user_public(array $u): array
         'role'           => $u['role'] ?? 'user',
         'is_active'      => (int)($u['is_active'] ?? 1),
         'created_at'     => $u['created_at'] ?? '',
+        'tags'           => user_tags_arr($u),
     ];
 }
 
@@ -2208,12 +3070,29 @@ function captcha_check(string $token, string $code): bool
 }
 
 /** 群组字段转公开结构 (需带 member_count/message_count/notice) */
-function social_group_public(array $g, int $muted = 0, int $unread = 0, int $firstUnreadId = 0): array
+function social_group_public(array $g, int $muted = 0, int $unread = 0, int $firstUnreadId = 0, $last = null, array $mention = []): array
 {
+    $lastArr = null;
+    if (is_array($last) && $last) {
+        $lastArr = [
+            'id'         => (int)$last['id'],
+            'user_id'    => (int)$last['user_id'],
+            'nickname'   => (string)(((string)($last['nickname'] ?? '')) !== '' ? $last['nickname'] : ($last['username'] ?? '')),
+            'content'    => (string)($last['content'] ?? ''),
+            'image'      => (string)($last['image'] ?? ''),
+            'created_at' => (string)($last['created_at'] ?? ''),
+        ];
+    }
     return [
         'muted'         => $muted,
         'unread'        => $unread,
         'first_unread_id' => $firstUnreadId,
+        'last_message'  => $lastArr,
+        'last_time'     => $lastArr ? (string)$lastArr['created_at'] : '',
+        'at_me'         => (int)($mention['at_me'] ?? 0),
+        'at_me_first'   => (int)($mention['at_me_first'] ?? 0),
+        'at_all'        => (int)($mention['at_all'] ?? 0),
+        'at_all_first'  => (int)($mention['at_all_first'] ?? 0),
         'id'            => (int)$g['id'],
         'name'          => (string)$g['name'],
         'icon'          => (string)($g['icon'] ?? ''),
@@ -2253,6 +3132,7 @@ function social_msg_public(array $m): array
         'nickname'    => $nick,
         'avatar'      => (string)($m['avatar'] ?? ''),
         'role'        => (string)($m['role'] ?? 'user'),
+        'tags'        => user_tags_arr($m),
         'content'     => $recalled ? '' : (string)$m['content'],
         'image'       => $recalled ? '' : (string)($m['image'] ?? ''),
         'image_w'     => $recalled ? 0 : (int)($m['image_w'] ?? 0),
@@ -2265,6 +3145,131 @@ function social_msg_public(array $m): array
         'created_at'  => (string)$m['created_at'],
         'time_text'   => date('H:i', $ts ?: time()),
     ];
+}
+
+/**
+ * SSE 实时消息推送主循环 (契约 A2/A3/A4)。
+ * 只在 case 'stream' 中调用; 直接输出事件流, 正常不会返回 (超时/断开都走 exit)。
+ *
+ * @param array $me     当前登录用户行 (current_user() 的结果)
+ * @param int   $pmCur  客户端已见过的最大私聊消息 id (<=0 = 从现在开始)
+ * @param int   $grpCur 客户端已见过的最大群消息 id (<=0 = 从现在开始)
+ */
+function sse_run(array $me, int $pmCur, int $grpCur): void
+{
+    $meId = (int)$me['id'];
+
+    // 游标 <=0 => 「从现在开始」: 建立连接时初始化为当前 MAX(id), 绝不重放历史 (契约 A1)
+    if ($pmCur <= 0) {
+        $st = db()->prepare('SELECT COALESCE(MAX(id), 0) FROM social_pm_messages');
+        $st->execute();
+        $pmCur = (int)$st->fetchColumn();
+    }
+    if ($grpCur <= 0) {
+        $st = db()->prepare('SELECT COALESCE(MAX(id), 0) FROM social_messages');
+        $st->execute();
+        $grpCur = (int)$st->fetchColumn();
+    }
+
+    // 长连接: 关掉全部输出缓冲与 gzip, 不设脚本超时 (契约 A2)
+    while (ob_get_level() > 0) { ob_end_flush(); }
+    @ini_set('zlib.output_compression', '0');
+    @ini_set('output_buffering', '0');
+    set_time_limit(0);
+    ignore_user_abort(true);
+
+    header('Content-Type: text/event-stream; charset=utf-8');
+    header('Cache-Control: no-cache, no-store, must-revalidate');
+    header('X-Accel-Buffering: no');
+    header('Connection: keep-alive');
+    echo "retry: 2000\n\n";
+    flush();
+
+    $startAt  = time();
+    $lastHbAt = $startAt;
+    $maxSec   = 25;   // 单连接封顶 25 秒, 到点发 bye 让客户端立刻重连, 不长期占用 worker
+    $hbSec    = 10;   // 心跳间隔
+
+    while (true) {
+        if (connection_aborted()) exit;              // 客户端断开 -> 立刻退出
+        $now = time();
+        if ($now - $startAt >= $maxSec) {            // 25 秒封顶: event: bye
+            sse_event('bye', ['reason' => 'timeout']);
+            exit;
+        }
+        if ($now - $lastHbAt >= $hbSec) {            // 心跳: 注释行, 客户端忽略
+            echo ": hb\n\n";
+            flush();
+            $lastHbAt = $now;
+        }
+
+        // ---- 私聊: 别人发给我的、未撤回的 (契约 A4, 只用参数绑定) ----
+        $st = db()->prepare('SELECT m.id, m.conv_id, m.from_user, m.content, m.image, m.created_at,
+                                    u.nickname, u.username
+                               FROM social_pm_messages m JOIN users u ON u.id = m.from_user
+                              WHERE m.to_user = :me AND m.id > :cur AND m.is_recalled = 0
+                              ORDER BY m.id ASC LIMIT 20');
+        $st->execute([':me' => $meId, ':cur' => $pmCur]);
+        foreach ($st->fetchAll() as $r) {
+            if ((int)$r['id'] > $pmCur) $pmCur = (int)$r['id'];
+            if ((int)$r['from_user'] === $meId) continue;   // 自己发的不推
+            sse_event('pm', [
+                'id'         => (int)$r['id'],
+                'conv_id'    => (int)$r['conv_id'],
+                'from_user'  => (int)$r['from_user'],
+                'nickname'   => (string)(($r['nickname'] ?? '') !== '' ? $r['nickname'] : ('用户' . (int)$r['from_user'])),
+                'username'   => (string)($r['username'] ?? ''),
+                'content'    => (string)($r['content'] ?? ''),
+                'image'      => (string)($r['image'] ?? ''),
+                'created_at' => (string)($r['created_at'] ?? ''),
+            ]);
+        }
+
+        // ---- 群消息: 我以外的人发的、未撤回的 (契约 A4) ----
+        $st = db()->prepare('SELECT m.id, m.group_id, m.user_id, m.content, m.image, m.at_users, m.created_at,
+                                    u.nickname, g.name AS group_name
+                               FROM social_messages m
+                               JOIN users u ON u.id = m.user_id
+                               LEFT JOIN social_groups g ON g.id = m.group_id
+                              WHERE m.id > :cur AND m.user_id <> :me AND m.is_recalled = 0
+                              ORDER BY m.id ASC LIMIT 30');
+        $st->execute([':cur' => $grpCur, ':me' => $meId]);
+        foreach ($st->fetchAll() as $r) {
+            if ((int)$r['id'] > $grpCur) $grpCur = (int)$r['id'];
+            $atMe  = 0;
+            $atAll = 0;
+            $rawAt = (string)($r['at_users'] ?? '');
+            if ($rawAt !== '') {
+                foreach (explode(',', $rawAt) as $v) {
+                    $v = (int)trim($v);
+                    if ($v === 0) $atAll = 1;                 // 0 = 所有人 (真实用户 id 都 > 0)
+                    if ($v > 0 && $v === $meId) $atMe = 1;
+                }
+            }
+            sse_event('group', [
+                'id'         => (int)$r['id'],
+                'group_id'   => (int)$r['group_id'],
+                'group_name' => (string)($r['group_name'] ?? ''),
+                'user_id'    => (int)$r['user_id'],
+                'nickname'   => (string)(($r['nickname'] ?? '') !== '' ? $r['nickname'] : ('用户' . (int)$r['user_id'])),
+                'content'    => (string)($r['content'] ?? ''),
+                'image'      => (string)($r['image'] ?? ''),
+                'at_me'      => $atMe,
+                'at_all'     => $atAll,
+                'created_at' => (string)($r['created_at'] ?? ''),
+            ]);
+        }
+
+        usleep(1000000);   // 每 1.0 秒一个 tick
+    }
+}
+
+/** 输出一条标准 SSE 事件 (event / data / 空行, 三行) */
+function sse_event(string $event, array $data): void
+{
+    echo 'event: ' . $event . "\n";
+    echo 'data: ' . json_encode($data, JSON_UNESCAPED_UNICODE) . "\n\n";
+    flush();
 }
 
 /** 通知字段转公开结构 */
@@ -2313,6 +3318,50 @@ function user_mute_state(int $uid, int $gid): ?array {
 }
 
 /** 禁言剩余时长文案: 永久 / 剩余 x 天|小时|分钟 */
+/** 用户标签: users.tags 存逗号分隔, 最多 5 个, 每个不超过 10 个字 */
+function user_tags_arr($u): array
+{
+    if (!is_array($u)) return [];
+    $raw = trim((string)($u['tags'] ?? ''));
+    if ($raw === '') return [];
+    $out = [];
+    foreach (explode(',', $raw) as $t) {
+        $t = trim($t);
+        if ($t === '' || mb_strlen($t) > 10) continue;
+        if (!in_array($t, $out, true)) $out[] = $t;
+        if (count($out) >= 5) break;
+    }
+    return $out;
+}
+
+/** 归一化后台传来的标签串 (支持逗号/顿号/空格分隔), 返回逗号分隔串 */
+function user_tags_str(string $raw): string
+{
+    $parts = preg_split('/[,，、]+/u', $raw) ?: [];
+    $out = [];
+    foreach ($parts as $t) {
+        $t = trim((string)$t);
+        if ($t === '' || mb_strlen($t) > 10) continue;
+        if (!in_array($t, $out, true)) $out[] = $t;
+        if (count($out) >= 5) break;
+    }
+    return implode(',', $out);
+}
+
+function setting_get(string $key, string $default = ''): string
+{
+    $st = db()->prepare('SELECT `value` FROM settings WHERE `key` = ?');
+    $st->execute([$key]);
+    $v = $st->fetchColumn();
+    return $v === false || $v === null ? $default : (string)$v;
+}
+
+function setting_set(string $key, string $value): void
+{
+    db()->prepare('INSERT INTO settings (`key`, `value`) VALUES (?, ?) ON DUPLICATE KEY UPDATE `value` = VALUES(`value`)')
+        ->execute([$key, $value]);
+}
+
 function mute_left_text(?array $mute): string {
     if (!$mute) return '';
     if (empty($mute['until_at'])) return '永久';
@@ -2340,6 +3389,135 @@ function my_muted_ids(): array
  * 当前用户在各个群里的未读情况: [gid => ['count' => 条数, 'first_id' => 第一条未读消息 id]]
  * 只统计别人发的、未撤回的、且 id 大于自己 last_read_id 的消息; 未登录返回空数组
  */
+/** 每个群最后一条没被撤回的消息 (群列表显示「最新消息」用) */
+function group_last_messages(array $gids): array
+{
+    $gids = array_values(array_filter(array_map('intval', $gids)));
+    if (!$gids) return [];
+    $in = implode(',', array_fill(0, count($gids), '?'));
+    $st = db()->prepare("SELECT m.id, m.group_id, m.user_id, m.content, m.image, m.created_at,
+                u.nickname, u.username
+            FROM social_messages m LEFT JOIN users u ON u.id = m.user_id
+            WHERE m.is_recalled = 0
+              AND m.id = (SELECT MAX(x.id) FROM social_messages x WHERE x.group_id = m.group_id AND x.is_recalled = 0)
+              AND m.group_id IN ($in)");
+    $st->execute($gids);
+    $out = [];
+    foreach ($st->fetchAll() as $r) { $out[(int)$r['group_id']] = $r; }
+    return $out;
+}
+
+/**
+ * 每个群里「@我」与「@所有人」的未读条数与第一条消息 id (群里没人 @ 的群不会出现在结果里)。
+ * 返回 [gid => ['at_me'=>n,'at_me_first'=>id,'at_all'=>n,'at_all_first'=>id]]
+ */
+function my_mention_map(): array
+{
+    $u = current_user();
+    if (!$u) return [];
+    $meId = (int)$u['id'];
+    try {
+        $st = db()->prepare('SELECT m.id, m.group_id, m.at_users
+            FROM social_messages m
+            LEFT JOIN social_reads r ON r.group_id = m.group_id AND r.user_id = ?
+            WHERE m.is_recalled = 0 AND m.user_id <> ? AND m.at_users <> ?
+              AND m.id > COALESCE(r.last_read_id, 0)
+            ORDER BY m.id ASC');
+        $st->execute([$meId, $meId, '']);
+        $out = [];
+        foreach ($st->fetchAll() as $r) {
+            $ids = array_map('intval', explode(',', (string)$r['at_users']));
+            $gid = (int)$r['group_id'];
+            if (!isset($out[$gid])) $out[$gid] = ['at_me' => 0, 'at_me_first' => 0, 'at_all' => 0, 'at_all_first' => 0];
+            if (in_array(0, $ids, true)) {
+                $out[$gid]['at_all']++;
+                if ((int)$out[$gid]['at_all_first'] === 0) $out[$gid]['at_all_first'] = (int)$r['id'];
+            }
+            if (in_array($meId, $ids, true)) {
+                $out[$gid]['at_me']++;
+                if ((int)$out[$gid]['at_me_first'] === 0) $out[$gid]['at_me_first'] = (int)$r['id'];
+            }
+        }
+        return $out;
+    } catch (Exception $e) { return []; }
+}
+
+// ==================== 私聊辅助 ====================
+
+/** 取(不存在则创建)两个用户之间的会话 id; $create=false 时不存在返回 0 */
+function pm_conv_id(int $a, int $b, bool $create = true): int
+{
+    if ($a === $b) return 0;
+    $lo = min($a, $b); $hi = max($a, $b);
+    $st = db()->prepare('SELECT id FROM social_pms WHERE user_a = ? AND user_b = ?');
+    $st->execute([$lo, $hi]);
+    $id = (int)($st->fetchColumn() ?: 0);
+    if ($id > 0 || !$create) return $id;
+    try {
+        db()->prepare('INSERT INTO social_pms (user_a, user_b, created_at) VALUES (?, ?, NOW())')->execute([$lo, $hi]);
+    } catch (Exception $e) { /* 并发下已存在, 忽略 */ }
+    $st->execute([$lo, $hi]);
+    return (int)($st->fetchColumn() ?: 0);
+}
+
+/** 会话里对方的 user id */
+function pm_other_id(array $conv, int $meId): int
+{
+    return ((int)$conv['user_a'] === $meId) ? (int)$conv['user_b'] : (int)$conv['user_a'];
+}
+
+/** 私聊消息 -> 客户端结构 */
+function pm_msg_public(array $m, int $meId): array
+{
+    $recalled = (int)($m['is_recalled'] ?? 0) === 1;
+    return [
+        'id'          => (int)$m['id'],
+        'conv_id'     => (int)$m['conv_id'],
+        'user_id'     => (int)$m['from_user'],
+        'to_user'     => (int)$m['to_user'],
+        'content'     => $recalled ? '' : (string)($m['content'] ?? ''),
+        'image'       => $recalled ? '' : (string)($m['image'] ?? ''),
+        'image_w'     => $recalled ? 0 : (int)($m['image_w'] ?? 0),
+        'image_h'     => $recalled ? 0 : (int)($m['image_h'] ?? 0),
+        'is_recalled' => $recalled ? 1 : 0,
+        'mine'        => ((int)$m['from_user'] === $meId) ? 1 : 0,
+        'created_at'  => (string)($m['created_at'] ?? ''),
+    ];
+}
+
+/** 我的私聊未读: [conv_id => ['count'=>n,'first_id'=>id]] */
+function pm_unread_map(): array
+{
+    $u = current_user();
+    if (!$u) return [];
+    $meId = (int)$u['id'];
+    try {
+        $st = db()->prepare('SELECT m.conv_id, COUNT(*) AS c, MIN(m.id) AS first_id
+            FROM social_pm_messages m
+            LEFT JOIN social_pm_reads r ON r.conv_id = m.conv_id AND r.user_id = ?
+            WHERE m.to_user = ? AND m.is_recalled = 0 AND m.id > COALESCE(r.last_read_id, 0)
+            GROUP BY m.conv_id');
+        $st->execute([$meId, $meId]);
+        $out = [];
+        foreach ($st->fetchAll() as $r) {
+            $out[(int)$r['conv_id']] = ['count' => (int)$r['c'], 'first_id' => (int)$r['first_id']];
+        }
+        return $out;
+    } catch (Exception $e) { return []; }
+}
+
+/** 用户简要资料 */
+function user_brief(array $u): array
+{
+    return [
+        'id'       => (int)$u['id'],
+        'username' => (string)($u['username'] ?? ''),
+        'nickname' => (string)(($u['nickname'] ?? '') !== '' ? $u['nickname'] : ($u['username'] ?? '')),
+        'avatar'   => (string)($u['avatar'] ?? ''),
+        'tags'     => user_tags_arr($u),
+    ];
+}
+
 function my_unread_map(): array
 {
     $u = current_user();
@@ -2407,4 +3585,122 @@ function notify_push_all(string $title, string $content, string $type = 'admin',
         try { $st->execute([(int)$id, $title, $content, $type, $link]); $n++; } catch (Exception $e) {}
     }
     return $n;
+}
+
+
+// ==================== 抽奖系统辅助函数 ====================
+
+/** 抽奖活动配置 (存在 settings.lottery_config) */
+function lottery_config(): array
+{
+    $cfg = [
+        'enabled'        => 0,
+        'title'          => '免费抽卡密',
+        'content'        => '',
+        'per_user_limit' => 1,
+        'daily_limit'    => 0,
+    ];
+    try {
+        $st = db()->prepare('SELECT `value` FROM `settings` WHERE `key` = ?');
+        $st->execute(['lottery_config']);
+        $raw = (string)($st->fetchColumn() ?: '');
+        if ($raw !== '') {
+            $j = json_decode($raw, true);
+            if (is_array($j)) $cfg = array_merge($cfg, $j);
+        }
+    } catch (Exception $e) { error_log('[lottery_config] ' . $e->getMessage()); }
+    $cfg['enabled'] = ((int)$cfg['enabled'] === 1) ? 1 : 0;
+    $cfg['per_user_limit'] = max(0, (int)$cfg['per_user_limit']);
+    $cfg['daily_limit'] = max(0, (int)($cfg['daily_limit'] ?? 0));
+    $cfg['title'] = (string)$cfg['title'];
+    $cfg['content'] = (string)$cfg['content'];
+    return $cfg;
+}
+
+/** 保存抽奖活动配置 */
+function lottery_config_save(array $cfg): void
+{
+    $json = json_encode($cfg, JSON_UNESCAPED_UNICODE);
+    db()->prepare('INSERT INTO `settings` (`key`, `value`) VALUES (?, ?) ON DUPLICATE KEY UPDATE `value` = VALUES(`value`)')
+        ->execute(['lottery_config', $json]);
+}
+
+/** 某用户已经抽了几次 (users.lottery_reset_at 之前的老记录不算, 这样后台能一键重置次数) */
+function lottery_drawn_count(int $userId): int
+{
+    $st = db()->prepare('SELECT COUNT(*) FROM lottery_draws d
+            LEFT JOIN users u ON u.id = d.user_id
+            WHERE d.user_id = ? AND (u.lottery_reset_at IS NULL OR d.created_at > u.lottery_reset_at)');
+    $st->execute([$userId]);
+    return (int)$st->fetchColumn();
+}
+
+/** 某用户今天抽了几次 (用于「每日抽奖机会」限制) */
+function lottery_drawn_count_today(int $userId): int
+{
+    $st = db()->prepare('SELECT COUNT(*) FROM lottery_draws d
+            LEFT JOIN users u ON u.id = d.user_id
+            WHERE d.user_id = ? AND DATE(d.created_at) = CURDATE()
+              AND (u.lottery_day_reset_at IS NULL OR d.created_at > u.lottery_day_reset_at)');
+    $st->execute([$userId]);
+    return (int)$st->fetchColumn();
+}
+
+/** 今天还能抽几次; 返回 -1 表示不限制 */
+function lottery_daily_left_for(array $user): int
+{
+    $daily = (int)(lottery_config()['daily_limit'] ?? 0);
+    if ($daily <= 0) return -1;
+    return max(0, $daily - lottery_drawn_count_today((int)$user['id']));
+}
+
+/**
+ * 用户还能抽几次 (总次数与每日次数取更小的那个)。
+ * users.lottery_quota: -1 = 跟随活动默认每人次数; >=0 = 该用户总共可抽的次数(已抽的从里面扣)
+ * settings.lottery_config.daily_limit: 0 = 不限, >0 = 每人每天最多抽几次
+ */
+function lottery_left_for(array $user): int
+{
+    $quota = array_key_exists('lottery_quota', $user) ? (int)$user['lottery_quota'] : -1;
+    if ($quota < 0) $quota = (int)lottery_config()['per_user_limit'];
+    $left = max(0, $quota - lottery_drawn_count((int)$user['id']));
+    $dailyLeft = lottery_daily_left_for($user);
+    if ($dailyLeft >= 0) $left = min($left, $dailyLeft);
+    return $left;
+}
+
+/**
+ * 抽一次奖: 从「启用的奖项 + 还没被用过的卡密」里随机取一张, 标记为已用并写中奖记录。
+ * 全程在事务里做, 保证同一张卡密不会发给两个人。
+ */
+function lottery_draw_once(int $userId): array
+{
+    $pdo = db();
+    $pdo->beginTransaction();
+    try {
+        $st = $pdo->prepare('SELECT c.id AS code_id, c.code, p.id AS prize_id, p.name AS prize_name, p.card_type
+            FROM lottery_codes c INNER JOIN lottery_prizes p ON p.id = c.prize_id
+            WHERE c.user_id = 0 AND p.is_active = 1
+            ORDER BY RAND() LIMIT 1 FOR UPDATE');
+        $st->execute();
+        $row = $st->fetch();
+        if (!$row) { $pdo->rollBack(); json_error('奖品已抽完, 请稍后再来'); }
+        $pdo->prepare('UPDATE lottery_codes SET user_id = ?, used_at = NOW() WHERE id = ? AND user_id = 0')
+            ->execute([$userId, (int)$row['code_id']]);
+        $pdo->prepare('INSERT INTO lottery_draws (user_id, prize_id, code_id, code, created_at) VALUES (?, ?, ?, ?, NOW())')
+            ->execute([$userId, (int)$row['prize_id'], (int)$row['code_id'], (string)$row['code']]);
+        $drawId = (int)$pdo->lastInsertId();
+        $got = [
+            'id'         => $drawId,
+            'prize_id'   => (int)$row['prize_id'],
+            'prize_name' => (string)$row['prize_name'],
+            'card_type'  => (string)$row['card_type'],
+            'code'       => (string)$row['code'],
+        ];
+        $pdo->commit();
+        return $got;
+    } catch (Exception $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        throw $e;
+    }
 }
