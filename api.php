@@ -356,9 +356,9 @@ try {
             $active = (string)param('is_active', '');
             $where = []; $args = [];
             if ($kw !== '') {
-                $where[] = '(username LIKE ? OR nickname LIKE ? OR email LIKE ?)';
+                $where[] = '(username LIKE ? OR nickname LIKE ? OR email LIKE ? OR tags LIKE ?)';
                 $like = '%' . $kw . '%';
-                array_push($args, $like, $like, $like);
+                array_push($args, $like, $like, $like, $like);
             }
             if (in_array($role, ['user', 'admin'], true)) { $where[] = 'role = ?'; $args[] = $role; }
             if ($active === '0' || $active === '1') { $where[] = 'is_active = ?'; $args[] = (int)$active; }
@@ -557,8 +557,9 @@ try {
         case 'user_profile':
             $me = current_user();
             $uid = (int)param('user_id', 0);
+            $gidQ = (int)param('group_id', 0);
             if ($uid <= 0) json_error('参数错误');
-            $st = db()->prepare('SELECT id, username, nickname, avatar, bio, role, created_at FROM users WHERE id = ? AND is_active = 1');
+            $st = db()->prepare('SELECT id, username, nickname, avatar, bio, role, created_at, tags FROM users WHERE id = ? AND is_active = 1');
             $st->execute([$uid]);
             $u = $st->fetch();
             if (!$u) json_error('用户不存在');
@@ -577,6 +578,11 @@ try {
                 $sameGroups = (int)$st->fetchColumn();
                 if (!$isMe) $convId = pm_conv_id((int)$me['id'], (int)$u['id'], false);
             }
+            // 禁言状态: 传了 group_id 就看本群, 否则看全站 (group_id = 0)
+            $muteState = user_mute_state((int)$u['id'], $gidQ);
+            $globalMute = $gidQ === 0 ? $muteState : user_mute_state((int)$u['id'], 0);
+            $isAdminMe = ($me && (($me['role'] ?? '') === 'admin')) ? 1 : 0;
+            $canMute = ($isAdminMe && !$isMe && (($u['role'] ?? '') !== 'admin')) ? 1 : 0;
             json_out([
                 'id'            => (int)$u['id'],
                 'username'      => (string)$u['username'],
@@ -590,6 +596,16 @@ try {
                 'is_me'         => $isMe,
                 'can_chat'      => ($me && !$isMe) ? 1 : 0,
                 'conv_id'       => $convId,
+                'tags'          => user_tags_arr($u),
+                'group_id'      => $gidQ,
+                'muted'         => $muteState ? 1 : 0,
+                'mute_left'     => $muteState ? mute_left_text($muteState) : '',
+                'mute_reason'   => $muteState ? (string)($muteState['reason'] ?? '') : '',
+                'global_muted'  => $globalMute ? 1 : 0,
+                'global_mute_left' => $globalMute ? mute_left_text($globalMute) : '',
+                'global_mute_reason' => $globalMute ? (string)($globalMute['reason'] ?? '') : '',
+                'is_admin_me'   => $isAdminMe,
+                'can_mute'      => $canMute,
             ]);
 
         // ============ 私聊 ============
@@ -598,8 +614,8 @@ try {
             $meId = (int)$me['id'];
             $unreadMap = pm_unread_map();
             $st = db()->prepare('SELECT c.*,
-                    ua.id AS a_id, ua.username AS a_username, ua.nickname AS a_nickname, ua.avatar AS a_avatar,
-                    ub.id AS b_id, ub.username AS b_username, ub.nickname AS b_nickname, ub.avatar AS b_avatar
+                    ua.id AS a_id, ua.username AS a_username, ua.nickname AS a_nickname, ua.avatar AS a_avatar, ua.tags AS a_tags,
+                    ub.id AS b_id, ub.username AS b_username, ub.nickname AS b_nickname, ub.avatar AS b_avatar, ub.tags AS b_tags
                 FROM social_pms c
                 INNER JOIN users ua ON ua.id = c.user_a
                 INNER JOIN users ub ON ub.id = c.user_b
@@ -609,9 +625,9 @@ try {
             $list = [];
             foreach ($st->fetchAll() as $c) {
                 if ((int)$c['user_a'] === $meId) {
-                    $other = ['id' => $c['b_id'], 'username' => $c['b_username'], 'nickname' => $c['b_nickname'], 'avatar' => $c['b_avatar']];
+                    $other = ['id' => $c['b_id'], 'username' => $c['b_username'], 'nickname' => $c['b_nickname'], 'avatar' => $c['b_avatar'], 'tags' => $c['b_tags']];
                 } else {
-                    $other = ['id' => $c['a_id'], 'username' => $c['a_username'], 'nickname' => $c['a_nickname'], 'avatar' => $c['a_avatar']];
+                    $other = ['id' => $c['a_id'], 'username' => $c['a_username'], 'nickname' => $c['a_nickname'], 'avatar' => $c['a_avatar'], 'tags' => $c['a_tags']];
                 }
                 $cid = (int)$c['id'];
                 $lastMsg = null;
@@ -649,7 +665,7 @@ try {
             $conv = $st->fetch();
             if (!$conv || ((int)$conv['user_a'] !== $meId && (int)$conv['user_b'] !== $meId)) json_error('会话不存在');
             $otherId = pm_other_id($conv, $meId);
-            $st = db()->prepare('SELECT id, username, nickname, avatar, bio, role, created_at FROM users WHERE id = ?');
+            $st = db()->prepare('SELECT id, username, nickname, avatar, bio, role, created_at, tags FROM users WHERE id = ?');
             $st->execute([$otherId]);
             $o = $st->fetch() ?: [];
             $limit = min(50, max(1, (int)param('limit', 30)));
@@ -691,6 +707,7 @@ try {
                     'bio'        => (string)($o['bio'] ?? ''),
                     'role'       => (string)($o['role'] ?? 'user'),
                     'created_at' => (string)($o['created_at'] ?? ''),
+                    'tags'       => user_tags_arr($o),
                 ],
                 'list'     => array_map(function ($m) use ($meId) { return pm_msg_public($m, $meId); }, $rows),
                 'has_more_before' => $hasMore,
@@ -841,7 +858,7 @@ try {
             $around = (int)param('around_id', 0);
             $limit = min(50, max(1, (int)param('limit', 30)));
             social_group_or_404($gid, false);
-            $sql = "SELECT m.*, u.nickname, u.username, u.avatar, u.role
+            $sql = "SELECT m.*, u.nickname, u.username, u.avatar, u.role, u.tags
                     FROM social_messages m LEFT JOIN users u ON u.id = m.user_id
                     WHERE m.group_id = ?";
             if ($around > 0) {
@@ -1111,7 +1128,7 @@ try {
             $me = current_user_or_401();
             $gid = (int)param('group_id', 0);
             social_group_or_404($gid, false);
-            $st = db()->prepare("SELECT DISTINCT u.id, u.nickname, u.username, u.avatar, u.role
+            $st = db()->prepare("SELECT DISTINCT u.id, u.nickname, u.username, u.avatar, u.role, u.tags
                     FROM users u
                     WHERE u.is_active = 1 AND u.id <> ? AND (
                         u.role = 'admin'
@@ -1132,6 +1149,7 @@ try {
                     'muted' => $mu ? 1 : 0,
                     'mute_left' => $mu ? mute_left_text($mu) : '',
                     'mute_reason' => $mu ? (string)($mu['reason'] ?? '') : '',
+                    'tags' => user_tags_arr($u),
                 ];
             }
             json_out(['list' => $list]);
@@ -1708,8 +1726,13 @@ try {
             $st->execute([$uid]);
             $u = $st->fetch();
             if (!$u) json_error('用户不存在');
-            db()->prepare('UPDATE users SET lottery_reset_at = NOW() WHERE id = ?')->execute([$uid]);
-            $u['lottery_reset_at'] = date('Y-m-d H:i:s');
+            $daily = (int)param('daily', 0) === 1;
+            // 统一用数据库的 NOW() 作为重置标记, 避免 PHP 与 MySQL 时区/秒差不一致
+            $nowDb = (string)db()->query('SELECT NOW()')->fetchColumn();
+            db()->prepare('UPDATE users SET lottery_reset_at = ?' . ($daily ? ', lottery_day_reset_at = ?' : '') . ' WHERE id = ?')
+                ->execute($daily ? [$nowDb, $nowDb, $uid] : [$nowDb, $uid]);
+            $u['lottery_reset_at'] = $nowDb;
+            if ($daily) $u['lottery_day_reset_at'] = $nowDb;
             json_out([
                 'user_id'     => $uid,
                 'drawn'       => lottery_drawn_count($uid),
@@ -1720,9 +1743,50 @@ try {
         // 一键重置所有人的抽奖机会
         case 'admin_lottery_quota_reset_all':
             require_admin();
-            $st = db()->prepare('UPDATE users SET lottery_reset_at = NOW()');
-            $st->execute();
-            json_out(['updated' => $st->rowCount()]);
+            $daily = (int)param('daily', 0) === 1;
+            $nowDb = (string)db()->query('SELECT NOW()')->fetchColumn();
+            $st = db()->prepare('UPDATE users SET lottery_reset_at = ?' . ($daily ? ', lottery_day_reset_at = ?' : ''));
+            $st->execute($daily ? [$nowDb, $nowDb] : [$nowDb]);
+            json_out(['updated' => $st->rowCount(), 'daily' => $daily ? 1 : 0]);
+
+        /**
+         * 抽奖活动重置。
+         * mode = quota    只清所有人「总抽奖次数」(中奖记录与已用卡密都保留)
+         * mode = daily    只清所有人「今日已抽次数」(总次数不变, 今天能再抽)
+         * mode = activity 整个活动重开: 删中奖记录 + 所有人总次数与今日次数归零
+         *                 + release_codes=1 把已经发出去的卡密退回卡密池(user_id=0)
+         *                 + clear_notices=1 删掉含卡密的通知, 避免旧卡密还能被看到
+         */
+        case 'admin_lottery_activity_reset':
+            require_admin();
+            $mode = trim((string)param('mode', 'quota'));
+            if (!in_array($mode, ['quota', 'daily', 'activity'], true)) json_error('参数错误');
+            $release = (int)param('release_codes', 1) === 1;
+            $clearNotices = (int)param('clear_notices', 1) === 1;
+            $now = (string)db()->query('SELECT NOW()')->fetchColumn();
+            $res = [
+                'mode' => $mode, 'users' => 0, 'draws_deleted' => 0,
+                'codes_released' => 0, 'notices_deleted' => 0,
+            ];
+            if ($mode === 'daily') {
+                $st = db()->prepare('UPDATE users SET lottery_day_reset_at = ?');
+                $st->execute([$now]);
+                $res['users'] = (int)$st->rowCount();
+                json_out($res);
+            }
+            $st = db()->prepare('UPDATE users SET lottery_reset_at = ?' . ($mode === 'activity' ? ', lottery_day_reset_at = ?' : ''));
+            $st->execute($mode === 'activity' ? [$now, $now] : [$now]);
+            $res['users'] = (int)$st->rowCount();
+            if ($mode === 'activity') {
+                $res['draws_deleted'] = (int)db()->exec('DELETE FROM lottery_draws');
+                if ($release) {
+                    $res['codes_released'] = (int)db()->exec('UPDATE lottery_codes SET user_id = 0, used_at = NULL WHERE user_id <> 0');
+                }
+                if ($clearNotices) {
+                    $res['notices_deleted'] = (int)db()->exec("DELETE FROM notifications WHERE type = 'lottery'");
+                }
+            }
+            json_out($res);
 
         case 'admin_lottery_quota_all':
             require_admin();
@@ -1850,6 +1914,53 @@ try {
             db()->prepare('DELETE FROM social_pm_messages WHERE conv_id = ?')->execute([$cid]);
             db()->prepare('UPDATE social_pms SET last_message_id = 0, last_at = NULL WHERE id = ?')->execute([$cid]);
             json_out(['deleted' => $n]);
+
+        // ============ 后台: 用户标签 ============
+        case 'admin_user_tags_set':
+            require_admin();
+            $uid = (int)param('user_id', 0);
+            if ($uid <= 0) json_error('参数错误');
+            $str = user_tags_str((string)param('tags', ''));
+            $st = db()->prepare('SELECT id FROM users WHERE id = ?');
+            $st->execute([$uid]);
+            if (!$st->fetch()) json_error('用户不存在');
+            db()->prepare('UPDATE users SET tags = ? WHERE id = ?')->execute([$str, $uid]);
+            json_out(['user_id' => $uid, 'tags' => $str === '' ? [] : explode(',', $str)]);
+
+        case 'admin_tags':
+            require_admin();
+            $presets = json_decode(setting_get('user_tag_presets', '[]'), true);
+            if (!is_array($presets)) $presets = [];
+            $used = [];
+            foreach (db()->query('SELECT tags FROM users WHERE tags <> \'\'')->fetchAll() as $r) {
+                foreach (user_tags_arr(['tags' => $r['tags']]) as $t) {
+                    if (!in_array($t, $used, true)) $used[] = $t;
+                }
+            }
+            json_out(['presets' => array_values($presets), 'used' => $used]);
+
+        case 'admin_tag_preset_save':
+            require_admin();
+            $tag = trim((string)param('tag', ''));
+            if ($tag === '') json_error('标签不能为空');
+            if (mb_strlen($tag) > 10) json_error('标签不能超过 10 个字');
+            $presets = json_decode(setting_get('user_tag_presets', '[]'), true);
+            if (!is_array($presets)) $presets = [];
+            if (!in_array($tag, $presets, true)) {
+                if (count($presets) >= 30) json_error('预设标签最多 30 个');
+                $presets[] = $tag;
+            }
+            setting_set('user_tag_presets', json_encode(array_values($presets), JSON_UNESCAPED_UNICODE));
+            json_out(['presets' => array_values($presets)]);
+
+        case 'admin_tag_preset_delete':
+            require_admin();
+            $tag = trim((string)param('tag', ''));
+            $presets = json_decode(setting_get('user_tag_presets', '[]'), true);
+            if (!is_array($presets)) $presets = [];
+            $presets = array_values(array_filter($presets, function ($t) use ($tag) { return (string)$t !== $tag; }));
+            setting_set('user_tag_presets', json_encode($presets, JSON_UNESCAPED_UNICODE));
+            json_out(['presets' => $presets]);
 
         // ============ 后台: 群消息一键清除 ============
         case 'admin_social_message_clear':
@@ -2845,6 +2956,7 @@ function user_public(array $u): array
         'role'           => $u['role'] ?? 'user',
         'is_active'      => (int)($u['is_active'] ?? 1),
         'created_at'     => $u['created_at'] ?? '',
+        'tags'           => user_tags_arr($u),
     ];
 }
 
@@ -3011,6 +3123,7 @@ function social_msg_public(array $m): array
         'nickname'    => $nick,
         'avatar'      => (string)($m['avatar'] ?? ''),
         'role'        => (string)($m['role'] ?? 'user'),
+        'tags'        => user_tags_arr($m),
         'content'     => $recalled ? '' : (string)$m['content'],
         'image'       => $recalled ? '' : (string)($m['image'] ?? ''),
         'image_w'     => $recalled ? 0 : (int)($m['image_w'] ?? 0),
@@ -3071,6 +3184,50 @@ function user_mute_state(int $uid, int $gid): ?array {
 }
 
 /** 禁言剩余时长文案: 永久 / 剩余 x 天|小时|分钟 */
+/** 用户标签: users.tags 存逗号分隔, 最多 5 个, 每个不超过 10 个字 */
+function user_tags_arr($u): array
+{
+    if (!is_array($u)) return [];
+    $raw = trim((string)($u['tags'] ?? ''));
+    if ($raw === '') return [];
+    $out = [];
+    foreach (explode(',', $raw) as $t) {
+        $t = trim($t);
+        if ($t === '' || mb_strlen($t) > 10) continue;
+        if (!in_array($t, $out, true)) $out[] = $t;
+        if (count($out) >= 5) break;
+    }
+    return $out;
+}
+
+/** 归一化后台传来的标签串 (支持逗号/顿号/空格分隔), 返回逗号分隔串 */
+function user_tags_str(string $raw): string
+{
+    $parts = preg_split('/[,，、]+/u', $raw) ?: [];
+    $out = [];
+    foreach ($parts as $t) {
+        $t = trim((string)$t);
+        if ($t === '' || mb_strlen($t) > 10) continue;
+        if (!in_array($t, $out, true)) $out[] = $t;
+        if (count($out) >= 5) break;
+    }
+    return implode(',', $out);
+}
+
+function setting_get(string $key, string $default = ''): string
+{
+    $st = db()->prepare('SELECT `value` FROM settings WHERE `key` = ?');
+    $st->execute([$key]);
+    $v = $st->fetchColumn();
+    return $v === false || $v === null ? $default : (string)$v;
+}
+
+function setting_set(string $key, string $value): void
+{
+    db()->prepare('INSERT INTO settings (`key`, `value`) VALUES (?, ?) ON DUPLICATE KEY UPDATE `value` = VALUES(`value`)')
+        ->execute([$key, $value]);
+}
+
 function mute_left_text(?array $mute): string {
     if (!$mute) return '';
     if (empty($mute['until_at'])) return '永久';
@@ -3223,6 +3380,7 @@ function user_brief(array $u): array
         'username' => (string)($u['username'] ?? ''),
         'nickname' => (string)(($u['nickname'] ?? '') !== '' ? $u['nickname'] : ($u['username'] ?? '')),
         'avatar'   => (string)($u['avatar'] ?? ''),
+        'tags'     => user_tags_arr($u),
     ];
 }
 
@@ -3346,7 +3504,10 @@ function lottery_drawn_count(int $userId): int
 /** 某用户今天抽了几次 (用于「每日抽奖机会」限制) */
 function lottery_drawn_count_today(int $userId): int
 {
-    $st = db()->prepare('SELECT COUNT(*) FROM lottery_draws WHERE user_id = ? AND DATE(created_at) = CURDATE()');
+    $st = db()->prepare('SELECT COUNT(*) FROM lottery_draws d
+            LEFT JOIN users u ON u.id = d.user_id
+            WHERE d.user_id = ? AND DATE(d.created_at) = CURDATE()
+              AND (u.lottery_day_reset_at IS NULL OR d.created_at > u.lottery_day_reset_at)');
     $st->execute([$userId]);
     return (int)$st->fetchColumn();
 }
