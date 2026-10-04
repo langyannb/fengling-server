@@ -994,6 +994,10 @@ try {
             if ((int)$me['is_active'] !== 1) json_error('你已被封禁', 403);
             $gid = (int)param('group_id', 0);
             $g = social_group_or_404($gid, false);
+            // 必须先加入群聊才能发言: 非管理员且不是群成员 -> 403 (放在禁言判定之前, 契约 A2)
+            if (($me['role'] ?? '') !== 'admin' && !social_is_member($gid, (int)$me['id'])) {
+                json_error('请先加入群聊再发言', 403);
+            }
             // 全员禁言: 非管理员一律拦截 (管理员不受限)
             if ((int)($g['all_muted'] ?? 0) === 1 && ($me['role'] ?? '') !== 'admin') {
                 json_error('群主已开启全体禁言, 暂时不能发言', 403);
@@ -1133,6 +1137,84 @@ try {
             db()->prepare('UPDATE social_groups SET all_muted = ? WHERE id = ?')->execute([$muted, $gid]);
             json_out(['group_id' => $gid, 'all_muted' => $muted]);
 
+        // ============ 群成员: 加入 / 退出 / 群图片 / 群成员列表 (契约 A3) ============
+
+        // 加入群聊: 幂等 —— 已是成员返回 already=1 (不加成员、不写系统消息)
+        case 'social_group_join':
+            $me = current_user_or_401();
+            $gid = (int)param('group_id', 0);
+            if ($gid <= 0) json_error('参数错误');
+            social_group_or_404($gid, false);
+            $already = 0;
+            $ins = db()->prepare('INSERT IGNORE INTO social_group_members (group_id, user_id, role, joined_at) VALUES (?, ?, ?, NOW())');
+            $ins->execute([$gid, (int)$me['id'], ($me['role'] ?? '') === 'admin' ? 'owner' : 'member']);
+            if ($ins->rowCount() <= 0) {
+                // 已经是成员 (也可能是并发下被别人先插入)
+                $already = 1;
+            } else {
+                // 新加入: 落一条系统消息 (昵称取 users.nickname, 空则 username; at_users = NULL)
+                social_system_message($gid, (int)$me['id'], social_user_display_name($me) . '加入了群聊');
+            }
+            json_out([
+                'group_id'     => $gid,
+                'joined'       => 1,
+                'already'      => $already,
+                'member_count' => social_member_count($gid),
+            ]);
+
+        // 退出群聊: 删成员行 + 系统消息「xxx退出了群聊」(最后一个成员 / owner 也允许退出, 不清群)
+        case 'social_group_leave':
+            $me = current_user_or_401();
+            $gid = (int)param('group_id', 0);
+            if ($gid <= 0) json_error('参数错误');
+            social_group_or_404($gid, false);
+            $del = db()->prepare('DELETE FROM social_group_members WHERE group_id = ? AND user_id = ?');
+            $del->execute([$gid, (int)$me['id']]);
+            if ($del->rowCount() <= 0) json_error('你还不是群成员');
+            social_system_message($gid, (int)$me['id'], social_user_display_name($me) . '退出了群聊');
+            json_out(['group_id' => $gid, 'left' => 1, 'member_count' => social_member_count($gid)]);
+
+        // 群图片列表 (群相册): 未撤回且有图片的消息, 按 id 倒序分页; 返回 image 原图地址
+        case 'social_group_images':
+            $gid = (int)param('group_id', 0);
+            if ($gid <= 0) json_error('参数错误');
+            social_group_or_404($gid, false);
+            $page = max(1, (int)param('page', 1));
+            $ps   = min(60, max(1, (int)param('page_size', 30)));
+            $off  = ($page - 1) * $ps;
+            $st = db()->prepare("SELECT COUNT(*) FROM social_messages m
+                                  WHERE m.group_id = ? AND m.is_recalled = 0 AND m.image <> ''");
+            $st->execute([$gid]);
+            $total = (int)$st->fetchColumn();
+            $st = db()->prepare("SELECT m.id, m.user_id, m.image, m.image_w, m.image_h, m.created_at,
+                                        u.nickname, u.username, u.avatar
+                                   FROM social_messages m LEFT JOIN users u ON u.id = m.user_id
+                                  WHERE m.group_id = ? AND m.is_recalled = 0 AND m.image <> ''
+                                  ORDER BY m.id DESC LIMIT " . $ps . ' OFFSET ' . $off);
+            $st->execute([$gid]);
+            $list = [];
+            foreach ($st->fetchAll() as $r) {
+                $nick = trim((string)($r['nickname'] ?? ''));
+                $list[] = [
+                    'id'         => (int)$r['id'],
+                    'user_id'    => (int)$r['user_id'],
+                    'nickname'   => $nick !== '' ? $nick : ('用户' . (int)$r['user_id']),
+                    'username'   => (string)($r['username'] ?? ''),
+                    'avatar'     => (string)($r['avatar'] ?? ''),
+                    'image'      => (string)($r['image'] ?? ''),
+                    'image_w'    => (int)($r['image_w'] ?? 0),
+                    'image_h'    => (int)($r['image_h'] ?? 0),
+                    'created_at' => (string)($r['created_at'] ?? ''),
+                ];
+            }
+            json_out([
+                'list'      => $list,
+                'page'      => $page,
+                'page_size' => $ps,
+                'total'     => $total,
+                'has_more'  => ($off + count($list)) < $total,
+            ]);
+
         // 消息免打扰 (每个用户对自己生效)
         case 'social_mute_set':
             $me = current_user_or_401();
@@ -1148,36 +1230,57 @@ try {
             }
             json_out(['group_id' => $gid, 'muted' => $muted]);
 
-        // 群成员候选 (供客户端 @ 选择): 在该群发过言的活跃用户 + 全部管理员, 排除自己
+        // 群成员列表 (可搜索): keyword 同时匹配 nickname / username (契约 A3)
+        // 排序: 群主 -> 管理员 -> 普通成员, 同角色按加入时间升序
         case 'social_group_members':
-            $me = current_user_or_401();
+            $me  = current_user();          // 游客也能看, is_member = 0
             $gid = (int)param('group_id', 0);
+            if ($gid <= 0) json_error('参数错误');
             social_group_or_404($gid, false);
-            $st = db()->prepare("SELECT DISTINCT u.id, u.nickname, u.username, u.avatar, u.role, u.tags
-                    FROM users u
-                    WHERE u.is_active = 1 AND u.id <> ? AND (
-                        u.role = 'admin'
-                        OR EXISTS (SELECT 1 FROM social_messages m WHERE m.user_id = u.id AND m.group_id = ?)
-                    )
-                    ORDER BY u.role ASC, u.id ASC");
-            $st->execute([(int)$me['id'], $gid]);
+            $kw   = trim((string)param('keyword', ''));
+            $page = max(1, (int)param('page', 1));
+            $ps   = min(60, max(1, (int)param('page_size', 30)));
+            $off  = ($page - 1) * $ps;
+            $where = ['m.group_id = ?'];
+            $args  = [$gid];
+            if ($kw !== '') {
+                $where[] = '(u.nickname LIKE ? OR u.username LIKE ?)';
+                $args[]  = '%' . $kw . '%';
+                $args[]  = '%' . $kw . '%';
+            }
+            $cond = ' WHERE ' . implode(' AND ', $where);
+            $st = db()->prepare('SELECT COUNT(*) FROM social_group_members m JOIN users u ON u.id = m.user_id' . $cond);
+            $st->execute($args);
+            $total = (int)$st->fetchColumn();
+            $st = db()->prepare('SELECT u.*, m.role AS group_role, m.joined_at
+                                   FROM social_group_members m JOIN users u ON u.id = m.user_id'
+                . $cond . " ORDER BY FIELD(m.role, 'owner', 'admin', 'member'), m.joined_at ASC, m.id ASC
+                          LIMIT " . $ps . ' OFFSET ' . $off);
+            $st->execute($args);
             $list = [];
             foreach ($st->fetchAll() as $u) {
-                $nick = trim((string)($u['nickname'] ?? ''));
-                $mu = user_mute_state((int)$u['id'], $gid);
-                $list[] = [
-                    'id' => (int)$u['id'],
-                    'nickname' => $nick !== '' ? $nick : (string)$u['username'],
-                    'username' => (string)$u['username'],
-                    'avatar' => (string)($u['avatar'] ?? ''),
-                    'role' => (string)$u['role'],
-                    'muted' => $mu ? 1 : 0,
-                    'mute_left' => $mu ? mute_left_text($mu) : '',
-                    'mute_reason' => $mu ? (string)($mu['reason'] ?? '') : '',
-                    'tags' => user_tags_arr($u),
-                ];
+                $mu   = user_mute_state((int)$u['id'], $gid);
+                $item = user_brief($u);
+                $item['role']        = (string)$u['group_role'];                 // 群角色: owner/admin/member
+                $item['group_role']  = (string)$u['group_role'];
+                $item['joined_at']   = (string)($u['joined_at'] ?? '');
+                // 兼容旧客户端 @ 选人面板 (SocialScreen.kt 里读 role == 'admin' 判全局管理员)
+                $item['global_role'] = (string)($u['role'] ?? 'user');
+                $item['is_admin']    = ((string)($u['role'] ?? '')) === 'admin' ? 1 : 0;
+                $item['muted']       = $mu ? 1 : 0;
+                $item['mute_left']   = $mu ? mute_left_text($mu) : '';
+                $item['mute_reason'] = $mu ? (string)($mu['reason'] ?? '') : '';
+                $list[] = $item;
             }
-            json_out(['list' => $list]);
+            $meId = $me ? (int)$me['id'] : 0;
+            json_out([
+                'list'         => $list,
+                'page'         => $page,
+                'page_size'    => $ps,
+                'total'        => $total,
+                'is_member'    => $meId > 0 ? social_is_member($gid, $meId) : 0,
+                'member_count' => social_member_count($gid),
+            ]);
 
         // ============ 群内禁言 (管理员) ============
         case 'admin_user_mute':
@@ -1445,6 +1548,60 @@ try {
             db()->prepare('DELETE FROM social_messages WHERE group_id = ?')->execute([$id]);
             db()->prepare('DELETE FROM social_groups WHERE id = ?')->execute([$id]);
             json_out(['ok' => true]);
+
+        // ============ 后台: 群成员管理 (契约 A5) ============
+        case 'admin_group_members':
+            require_admin();
+            $gid = (int)param('group_id', 0);
+            if ($gid <= 0) json_error('参数错误');
+            social_group_or_404($gid, false);
+            $kw   = trim((string)param('keyword', ''));
+            $page = max(1, (int)param('page', 1));
+            $ps   = min(60, max(1, (int)param('page_size', 30)));
+            $off  = ($page - 1) * $ps;
+            $where = ['m.group_id = ?'];
+            $args  = [$gid];
+            if ($kw !== '') {
+                $where[] = '(u.nickname LIKE ? OR u.username LIKE ?)';
+                $args[]  = '%' . $kw . '%';
+                $args[]  = '%' . $kw . '%';
+            }
+            $cond = ' WHERE ' . implode(' AND ', $where);
+            $st = db()->prepare('SELECT COUNT(*) FROM social_group_members m JOIN users u ON u.id = m.user_id' . $cond);
+            $st->execute($args);
+            $total = (int)$st->fetchColumn();
+            $st = db()->prepare('SELECT u.*, m.role AS group_role, m.joined_at
+                                   FROM social_group_members m JOIN users u ON u.id = m.user_id'
+                . $cond . " ORDER BY FIELD(m.role, 'owner', 'admin', 'member'), m.joined_at ASC, m.id ASC
+                          LIMIT " . $ps . ' OFFSET ' . $off);
+            $st->execute($args);
+            $list = [];
+            foreach ($st->fetchAll() as $u) {
+                $item = user_brief($u);
+                $item['role']        = (string)$u['group_role'];
+                $item['group_role']  = (string)$u['group_role'];
+                $item['joined_at']   = (string)($u['joined_at'] ?? '');
+                $item['global_role'] = (string)($u['role'] ?? 'user');
+                $item['is_admin']    = ((string)($u['role'] ?? '')) === 'admin' ? 1 : 0;
+                $list[] = $item;
+            }
+            json_out(['list' => $list, 'page' => $page, 'page_size' => $ps, 'total' => $total]);
+
+        case 'admin_group_member_remove':
+            require_admin();
+            $gid = (int)param('group_id', 0);
+            $uid = (int)param('user_id', 0);
+            if ($gid <= 0 || $uid <= 0) json_error('参数错误');
+            social_group_or_404($gid, false);
+            $del = db()->prepare('DELETE FROM social_group_members WHERE group_id = ? AND user_id = ?');
+            $del->execute([$gid, $uid]);
+            if ($del->rowCount() <= 0) json_error('成员不存在');
+            json_out([
+                'group_id'     => $gid,
+                'user_id'      => $uid,
+                'removed'      => 1,
+                'member_count' => social_member_count($gid),
+            ]);
 
         // ============ 后台: 群消息管理 ============
         case 'admin_social_messages':
@@ -3096,6 +3253,61 @@ function captcha_check(string $token, string $code): bool
 }
 
 /** 群组字段转公开结构 (需带 member_count/message_count/notice) */
+/** 群成员真实人数 (social_group_members 计数; 单请求内缓存) */
+function social_member_count(int $gid): int
+{
+    static $cache = [];
+    if (array_key_exists($gid, $cache)) return $cache[$gid];
+    try {
+        $st = db()->prepare('SELECT COUNT(*) FROM social_group_members WHERE group_id = ?');
+        $st->execute([$gid]);
+        $cache[$gid] = (int)$st->fetchColumn();
+    } catch (Exception $e) {
+        $cache[$gid] = 0;   // 迁移未跑时不能让接口 500
+    }
+    return $cache[$gid];
+}
+
+/** 是否群成员 (游客 = 0; $uid <= 0 时取当前登录用户) */
+function social_is_member(int $gid, int $uid = 0): int
+{
+    if ($uid <= 0) {
+        $u = current_user();
+        if (!$u) return 0;
+        $uid = (int)$u['id'];
+    }
+    static $cache = [];
+    $key = $gid . ':' . $uid;
+    if (array_key_exists($key, $cache)) return $cache[$key];
+    try {
+        $st = db()->prepare('SELECT 1 FROM social_group_members WHERE group_id = ? AND user_id = ? LIMIT 1');
+        $st->execute([$gid, $uid]);
+        $cache[$key] = $st->fetchColumn() ? 1 : 0;
+    } catch (Exception $e) {
+        $cache[$key] = 0;
+    }
+    return $cache[$key];
+}
+
+/** 昵称 (空则用户名) —— 系统消息文案里用 */
+function social_user_display_name(array $u): string
+{
+    $nick = trim((string)($u['nickname'] ?? ''));
+    if ($nick !== '') return $nick;
+    $name = (string)($u['username'] ?? '');
+    return $name !== '' ? $name : ('用户' . (int)($u['id'] ?? 0));
+}
+
+/** 写一条系统消息: msg_type='system', at_users = NULL (不进未读计数) */
+function social_system_message(int $gid, int $uid, string $content): int
+{
+    db()->prepare("INSERT INTO social_messages
+            (group_id, user_id, content, image, image_w, image_h, at_users, quote_id, is_recalled, msg_type)
+            VALUES (?, ?, ?, '', 0, 0, NULL, 0, 0, 'system')")
+        ->execute([$gid, $uid, $content]);
+    return (int)db()->lastInsertId();
+}
+
 function social_group_public(array $g, int $muted = 0, int $unread = 0, int $firstUnreadId = 0, $last = null, array $mention = []): array
 {
     $lastArr = null;
@@ -3124,7 +3336,8 @@ function social_group_public(array $g, int $muted = 0, int $unread = 0, int $fir
         'icon'          => (string)($g['icon'] ?? ''),
         'description'   => (string)($g['description'] ?? ''),
         'notice'        => (string)($g['notice'] ?? ''),
-        'member_count'  => (int)($g['member_count'] ?? 0),
+        'member_count'  => social_member_count((int)$g['id']),
+        'is_member'     => social_is_member((int)$g['id']),
         'message_count' => (int)($g['message_count'] ?? 0),
         'sort_order'    => (int)($g['sort_order'] ?? 0),
         'is_active'     => (int)($g['is_active'] ?? 1),
@@ -3160,6 +3373,7 @@ function social_msg_public(array $m): array
         'avatar'      => (string)($m['avatar'] ?? ''),
         'role'        => (string)($m['role'] ?? 'user'),
         'tags'        => user_tags_arr($m),
+        'msg_type'    => (string)($m['msg_type'] ?? ''),
         'content'     => $recalled ? '' : (string)$m['content'],
         'image'       => $recalled ? '' : (string)($m['image'] ?? ''),
         'image_w'     => $recalled ? 0 : (int)($m['image_w'] ?? 0),
@@ -3255,7 +3469,7 @@ function sse_run(array $me, int $pmCur, int $grpCur): void
         }
 
         // ---- 群消息: 我以外的人发的、未撤回的 (契约 A4) ----
-        $st = db()->prepare('SELECT m.id, m.group_id, m.user_id, m.content, m.image, m.at_users, m.created_at,
+        $st = db()->prepare('SELECT m.id, m.group_id, m.user_id, m.content, m.image, m.at_users, m.msg_type, m.created_at,
                                     u.nickname, g.name AS group_name
                                FROM social_messages m
                                JOIN users u ON u.id = m.user_id
@@ -3286,6 +3500,8 @@ function sse_run(array $me, int $pmCur, int $grpCur): void
                 'at_me'      => $atMe,
                 'at_all'     => $atAll,
                 'muted'      => isset($mutedIds[(int)$r['group_id']]) ? 1 : 0,
+                'msg_type'   => (string)($r['msg_type'] ?? ''),
+
                 'created_at' => (string)($r['created_at'] ?? ''),
             ]);
         }
@@ -3557,8 +3773,9 @@ function my_unread_map(): array
                 FROM social_messages m
                 LEFT JOIN social_reads r ON r.group_id = m.group_id AND r.user_id = ?
                 WHERE m.is_recalled = 0 AND m.user_id <> ? AND m.id > COALESCE(r.last_read_id, 0)
+                      AND (m.msg_type IS NULL OR m.msg_type <> ?)
                 GROUP BY m.group_id');
-        $st->execute([(int)$u['id'], (int)$u['id']]);
+        $st->execute([(int)$u['id'], (int)$u['id'], 'system']);
         $out = [];
         foreach ($st->fetchAll() as $r) {
             $out[(int)$r['group_id']] = ['count' => (int)$r['c'], 'first_id' => (int)$r['first_id']];
