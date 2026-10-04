@@ -32,6 +32,7 @@
         <a-button @click="openQuotaAll">
           <template #icon><icon-gift /></template>一键设置所有人抽奖次数
         </a-button>
+        <a-button status="danger" @click="resetQuotaAll">一键重置所有人抽奖次数</a-button>
         <a-button :loading="loading" @click="load">
           <template #icon><icon-refresh /></template>刷新
         </a-button>
@@ -97,6 +98,7 @@
                   {{ Number(record.is_active) ? '禁用' : '启用' }}
                 </a-button>
                 <a-button type="text" size="small" @click="openQuota(record)">设置抽奖次数</a-button>
+                <a-button type="text" size="small" status="warning" @click="resetQuota(record)">重置抽奖次数</a-button>
                 <a-button type="text" status="danger" size="small" @click="delUser(record)">删除</a-button>
               </div>
             </div>
@@ -186,6 +188,7 @@
                 {{ Number(record.is_active) ? '禁用' : '启用' }}
               </a-button>
               <a-button type="text" size="small" @click="openQuota(record)">设置抽奖次数</a-button>
+              <a-button type="text" size="small" status="warning" @click="resetQuota(record)">重置抽奖次数</a-button>
               <a-button type="text" status="danger" size="small" @click="delUser(record)">删除</a-button>
             </template>
           </a-table-column>
@@ -710,6 +713,57 @@ function saveQuotaAll() {
       } finally {
         quotaSavingAll.value = false
       }
+    },
+  })
+}
+
+// ===== 重置抽奖次数 (已抽次数清零, 中奖记录保留) =====
+
+/** 重置单个用户的抽奖次数: admin_lottery_quota_reset */
+function resetQuota(record) {
+  const name = record.username + (record.nickname ? ' (' + record.nickname + ')' : '')
+  Modal.warning({
+    title: '确认重置该用户的抽奖次数?',
+    content: '将把「' + name + '」的已抽次数清零 (当前已抽 ' + qnum(record.lottery_drawn) +
+      ' 次 / 剩余 ' + qnum(record.lottery_left) + ' 次)；' +
+      '中奖记录保留，重置后该用户可以重新抽满次数。此操作不可撤销。',
+    okText: '重置',
+    cancelText: '取消',
+    hideCancel: false,
+    okButtonProps: { status: 'danger' },
+    onOk: async () => {
+      const r = await api('admin_lottery_quota_reset', { user_id: Number(record.id) || 0 }, 'POST')
+      if (r.code !== 0) {
+        if (r.code !== 401) Message.error(r.msg || '重置失败')
+        return false
+      }
+      const d = (r.data || {})
+      Message.success('已重置, 当前已抽 ' + qnum(d.drawn) + ' 次 / 剩余 ' + qnum(d.left) + ' 次')
+      load()
+      return true
+    },
+  })
+}
+
+/** 一键重置所有人抽奖次数: admin_lottery_quota_reset_all (强制二次确认) */
+function resetQuotaAll() {
+  Modal.warning({
+    title: '确认重置所有人的抽奖次数?',
+    content: '将把所有用户的已抽次数全部清零（中奖记录保留），' +
+      '重置后所有用户都可以重新抽满次数。此操作影响全部用户且不可撤销，请谨慎操作。',
+    okText: '确认重置',
+    cancelText: '取消',
+    hideCancel: false,
+    okButtonProps: { status: 'danger' },
+    onOk: async () => {
+      const r = await api('admin_lottery_quota_reset_all', {}, 'POST')
+      if (r.code !== 0) {
+        if (r.code !== 401) Message.error(r.msg || '重置失败')
+        return false
+      }
+      Message.success('已重置 ' + qnum(r.data && r.data.updated) + ' 个用户的抽奖次数')
+      load()
+      return true
     },
   })
 }

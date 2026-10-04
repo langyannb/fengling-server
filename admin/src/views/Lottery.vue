@@ -243,6 +243,11 @@
 
         <!-- ==================== 三、活动设置 ==================== -->
         <a-tab-pane key="config" title="活动设置">
+          <!-- 显著说明: 0 = 不限 (服务端 >999 会报错) -->
+          <a-alert type="info" style="margin-bottom: 12px">
+            <div><b>每日抽奖次数：0 = 不限</b>（该用户每天都能抽，只受「默认每人抽奖次数 / 用户单独设置」限制）。</div>
+            <div>填 1-999 = 每人每天最多抽这么多次，次日自动重置；超过 999 服务端会报错。</div>
+          </a-alert>
           <a-spin :loading="configLoading" style="width: 100%">
             <a-form :model="configForm" layout="vertical" class="config-form">
               <a-form-item label="抽奖开关">
@@ -264,6 +269,12 @@
               <a-form-item label="默认每人抽奖次数">
                 <a-input-number v-model="configForm.per_user_limit" :min="0" :precision="0" style="width: 100%" />
                 <div class="form-tip">0 = 默认每人不能抽；每个用户可以用「用户管理 → 设置抽奖次数」单独覆盖。</div>
+              </a-form-item>
+              <a-form-item label="每日抽奖次数">
+                <a-input-number v-model="configForm.daily_limit" :min="0" :max="999" :precision="0" style="width: 100%" />
+                <div class="form-tip">
+                  <b>0 = 不限</b>（每人每天都能抽）；1-999 = 每人每天最多抽这么多次，次日自动重置。
+                </div>
               </a-form-item>
               <a-form-item>
                 <a-button type="primary" :loading="configSaving" @click="saveConfig">保存</a-button>
@@ -885,7 +896,7 @@ function onDrawPageSizeChange(pageSize) {
 // ============ 活动设置 ============
 const configLoading = ref(false)
 const configSaving = ref(false)
-const configForm = ref({ enabled: 0, title: '', content: '', per_user_limit: 1 })
+const configForm = ref({ enabled: 0, title: '', content: '', per_user_limit: 1, daily_limit: 0 })
 
 async function loadConfig() {
   configLoading.value = true
@@ -905,6 +916,7 @@ async function loadConfig() {
     title: d.title || '',
     content: d.content || '',
     per_user_limit: num(d.per_user_limit),
+    daily_limit: num(d.daily_limit),
   }
 }
 
@@ -917,6 +929,7 @@ async function saveConfig() {
       title: f.title || '',
       content: f.content || '',
       per_user_limit: num(f.per_user_limit),
+      daily_limit: num(f.daily_limit),
     }, 'POST')
     if (r.code !== 0) {
       if (r.code !== 401) Message.error(r.msg || '保存失败')
