@@ -21,6 +21,8 @@ require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/uc.php';
 require_once __DIR__ . '/apk.php';
 require_once __DIR__ . '/mailer.php';
+// 时段/重置/冷却等时间计算一律以服务器本地时区(中国)为基准
+date_default_timezone_set('Asia/Shanghai');
 
 header('Access-Control-Allow-Origin: *');
 header('Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS');
@@ -1337,7 +1339,7 @@ try {
         case 'lottery_info':
             $me = current_user_or_401();
             $cfg = lottery_config();
-            $st = db()->prepare("SELECT p.id, p.name, p.card_type,
+            $st = db()->prepare("SELECT p.id, p.name, p.card_type, p.weight,
                     (SELECT COUNT(*) FROM lottery_codes c WHERE c.prize_id = p.id AND c.user_id = 0) AS left_cnt
                 FROM lottery_prizes p WHERE p.is_active = 1 ORDER BY p.sort_order ASC, p.id ASC");
             $st->execute();
@@ -1348,8 +1350,10 @@ try {
                 $prizes[] = [
                     'id' => (int)$p['id'], 'name' => (string)$p['name'],
                     'card_type' => (string)$p['card_type'], 'left' => $leftCnt,
+                    'weight' => (int)($p['weight'] ?? 0) > 0 ? (int)$p['weight'] : 100,
                 ];
             }
+            if ((int)$cfg['show_prizes'] !== 1) $prizes = [];
             $st = db()->prepare('SELECT d.id, d.prize_id, d.code, d.created_at, p.name AS prize_name, p.card_type
                 FROM lottery_draws d LEFT JOIN lottery_prizes p ON p.id = d.prize_id
                 WHERE d.user_id = ? ORDER BY d.id DESC LIMIT 20');
@@ -1372,6 +1376,24 @@ try {
                 'daily_limit'    => (int)$cfg['daily_limit'],
                 'my_today_drawn' => lottery_drawn_count_today((int)$me['id']),
                 'my_today_left'  => lottery_daily_left_for($me),
+                'server_time'    => date('Y-m-d H:i:s', lottery_cfg_ts()),
+                'window'         => lottery_window_state($cfg),
+                'daily_reset_time' => (string)$cfg['daily_reset_time'],
+                'week_limit'     => (int)$cfg['week_limit'],
+                'my_week_drawn'  => lottery_drawn_count_week((int)$me['id']),
+                'my_week_left'   => lottery_weekly_left_for($me),
+                'cooldown_seconds' => (int)$cfg['cooldown_seconds'],
+                'cooldown_left'  => lottery_cooldown_left($me),
+                'show_prizes'    => (int)$cfg['show_prizes'],
+                'show_stock'     => (int)$cfg['show_stock'],
+                'daily_total_limit' => (int)$cfg['daily_total_limit'],
+                'daily_total_left'  => lottery_daily_total_left($cfg),
+                'success_text'   => (string)$cfg['success_text'],
+                'empty_text'     => (string)$cfg['empty_text'],
+                'start_date'     => (string)$cfg['start_date'],
+                'end_date'       => (string)$cfg['end_date'],
+                'windows_enabled' => (int)$cfg['windows_enabled'],
+                'windows'        => $cfg['windows'],
                 'prizes'         => $prizes,
                 'records'        => $records,
             ]);
@@ -1379,20 +1401,37 @@ try {
         case 'lottery_draw':
             $me = current_user_or_401();
             $cfg = lottery_config();
+            // 校验顺序固定: 开关 -> 日期范围 -> 开放时段 -> 冷却 -> 全站每日总量 -> 每日 -> 每周 -> 总次数 -> 池子
             if ((int)$cfg['enabled'] !== 1) json_error('抽奖活动已关闭');
+            $range = lottery_date_range_state($cfg, lottery_cfg_ts());
+            if ($range === 1) json_error('抽奖活动还没开始');
+            if ($range === 2) json_error('抽奖活动已经结束');
+            if (!lottery_window_ts_open($cfg, lottery_cfg_ts())) {
+                $win = lottery_window_state($cfg);
+                $msg = '现在不在抽奖时间内';
+                if ((string)$win['next_open_at'] !== '') $msg .= ', 下次开放: ' . $win['next_open_at'];
+                json_error($msg);
+            }
+            $cdLeft = lottery_cooldown_left($me);
+            if ($cdLeft > 0) json_error('抽得太快啦, 请 ' . $cdLeft . ' 秒后再试');
+            $totalLeft = lottery_daily_total_left($cfg);
+            if ($totalLeft === 0) json_error('今天的奖品已经发完了, 明天再来');
             if (lottery_daily_left_for($me) === 0) json_error('今天的抽奖次数已用完, 明天再来');
+            if (lottery_weekly_left_for($me) === 0) json_error('本周的抽奖次数已用完, 下周再来');
             if (lottery_left_for($me) <= 0) json_error('你的抽奖次数已用完');
             $got = lottery_draw_once((int)$me['id']);
-            try {
-                db()->prepare('INSERT INTO notifications (user_id, title, content, type, link, is_read) VALUES (?, ?, ?, ?, ?, 0)')
-                    ->execute([
-                        (int)$me['id'],
-                        '恭喜抽中 ' . $got['prize_name'],
-                        "你的卡密: " . $got['code'] . "\n(长按可复制, 也可以随时在「我的 → 消息中心」查看)",
-                        'lottery',
-                        '',
-                    ]);
-            } catch (Exception $e) { error_log('[lottery notify] ' . $e->getMessage()); }
+            if ((int)$cfg['notify_winner'] === 1) {
+                try {
+                    db()->prepare('INSERT INTO notifications (user_id, title, content, type, link, is_read) VALUES (?, ?, ?, ?, ?, 0)')
+                        ->execute([
+                            (int)$me['id'],
+                            '恭喜抽中 ' . $got['prize_name'],
+                            "你的卡密: " . $got['code'] . "\n(长按可复制, 也可以随时在「我的 → 消息中心」查看)",
+                            'lottery',
+                            '',
+                        ]);
+                } catch (Exception $e) { error_log('[lottery notify] ' . $e->getMessage()); }
+            }
             json_out([
                 'draw_id'    => (int)$got['id'],
                 'prize_id'   => (int)$got['prize_id'],
@@ -1400,6 +1439,11 @@ try {
                 'card_type'  => (string)$got['card_type'],
                 'code'       => (string)$got['code'],
                 'left'       => lottery_left_for($me),
+                'my_today_left' => lottery_daily_left_for($me),
+                'my_week_left'  => lottery_weekly_left_for($me),
+                'daily_total_left' => lottery_daily_total_left($cfg),
+                'cooldown_seconds' => (int)$cfg['cooldown_seconds'],
+                'cooldown_left'    => lottery_cooldown_left($me),
             ]);
 
         case 'lottery_records':
@@ -1702,6 +1746,7 @@ try {
                 $list[] = [
                     'id' => (int)$r['id'], 'name' => (string)$r['name'], 'card_type' => (string)$r['card_type'],
                     'description' => (string)($r['description'] ?? ''), 'sort_order' => (int)$r['sort_order'],
+                    'weight' => (int)($r['weight'] ?? 0) > 0 ? (int)$r['weight'] : 100,
                     'is_active' => (int)$r['is_active'], 'total' => (int)$r['total_cnt'],
                     'used' => (int)$r['used_cnt'], 'left' => (int)$r['total_cnt'] - (int)$r['used_cnt'],
                     'created_at' => (string)$r['created_at'],
@@ -1717,6 +1762,9 @@ try {
             $desc = trim((string)param('description', ''));
             $sort = (int)param('sort_order', 0);
             $act  = (int)param('is_active', 1) === 1 ? 1 : 0;
+            $weight = (int)param('weight', 100); // 后台 a-input-number 提交数字, 兼容 "100" 字符串
+            if ($weight < 0) $weight = 0;
+            if ($weight > 1000) json_error('奖项权重不能超过 1000');
             if ($name === '') json_error('奖项名称不能为空');
             if (mb_strlen($name) > 50) json_error('奖项名称不能超过 50 个字');
             if ($type === '') $type = '通用';
@@ -1727,12 +1775,12 @@ try {
             $dup = (int)($st->fetchColumn() ?: 0);
             if ($dup > 0 && $dup !== $id) json_error('奖项名称已存在');
             if ($id > 0) {
-                db()->prepare('UPDATE lottery_prizes SET name = ?, card_type = ?, description = ?, sort_order = ?, is_active = ? WHERE id = ?')
-                    ->execute([$name, $type, $desc, $sort, $act, $id]);
-                json_out(['id' => $id]);
+                db()->prepare('UPDATE lottery_prizes SET name = ?, card_type = ?, description = ?, sort_order = ?, is_active = ?, weight = ? WHERE id = ?')
+                    ->execute([$name, $type, $desc, $sort, $act, $weight, $id]);
+                json_out(['id' => $id, 'weight' => $weight]);
             }
-            db()->prepare('INSERT INTO lottery_prizes (name, card_type, description, sort_order, is_active) VALUES (?, ?, ?, ?, ?)')
-                ->execute([$name, $type, $desc, $sort, $act]);
+            db()->prepare('INSERT INTO lottery_prizes (name, card_type, description, sort_order, is_active, weight) VALUES (?, ?, ?, ?, ?, ?)')
+                ->execute([$name, $type, $desc, $sort, $act, $weight]);
             json_out(['id' => (int)db()->lastInsertId()]);
 
         case 'admin_lottery_prize_delete':
@@ -1845,19 +1893,58 @@ try {
         case 'admin_lottery_config_set':
             require_admin();
             $old = lottery_config();
-            $enabled = (int)param('enabled', $old['enabled']) === 1 ? 1 : 0;
+            $cfg = $old;
             $title = trim((string)param('title', $old['title']));
             $content = (string)param('content', $old['content']);
-            $limit = (int)param('per_user_limit', $old['per_user_limit']);
             if (mb_strlen($title) > 50) json_error('抽奖标题不能超过 50 个字');
             if (mb_strlen($content) > 2000) json_error('抽奖内容不能超过 2000 个字');
+            $limit = (int)param('per_user_limit', (int)$old['per_user_limit']);
             if ($limit < 0) $limit = 0;
             if ($limit > 9999) json_error('每人抽奖次数不能超过 9999');
-            $daily = (int)param('daily_limit', (int)($old['daily_limit'] ?? 0));
+            $daily = (int)param('daily_limit', (int)$old['daily_limit']);
             if ($daily < 0) $daily = 0;
             if ($daily > 999) json_error('每日抽奖次数不能超过 999');
-            lottery_config_save(['enabled' => $enabled, 'title' => $title, 'content' => $content, 'per_user_limit' => $limit, 'daily_limit' => $daily]);
+            $week = (int)param('week_limit', (int)$old['week_limit']);
+            if ($week < 0) $week = 0;
+            if ($week > 999) json_error('每周抽奖次数不能超过 999');
+            $cool = (int)param('cooldown_seconds', (int)$old['cooldown_seconds']);
+            if ($cool < 0) $cool = 0;
+            if ($cool > 86400) json_error('冷却时间不能超过 86400 秒');
+            $dtl = (int)param('daily_total_limit', (int)$old['daily_total_limit']);
+            if ($dtl < 0) $dtl = 0;
+            if ($dtl > 999999) json_error('今天发放上限不能超过 999999');
+            $cfg['enabled'] = lottery_flag(param('enabled', (int)$old['enabled']));
+            $cfg['title'] = $title;
+            $cfg['content'] = $content;
+            $cfg['per_user_limit'] = $limit;
+            $cfg['daily_limit'] = $daily;
+            $cfg['week_limit'] = $week;
+            $cfg['cooldown_seconds'] = $cool;
+            $cfg['daily_total_limit'] = $dtl;
+            $cfg['daily_reset_time'] = lottery_config_validate_time(param('daily_reset_time', $old['daily_reset_time']));
+            $cfg['success_text'] = lottery_config_validate_text('提示文案', param('success_text', $old['success_text']), 200);
+            $cfg['empty_text'] = lottery_config_validate_text('提示文案', param('empty_text', $old['empty_text']), 200);
+            $cfg['show_prizes'] = lottery_flag(param('show_prizes', (int)$old['show_prizes']));
+            $cfg['show_stock'] = lottery_flag(param('show_stock', (int)$old['show_stock']));
+            $cfg['notify_winner'] = lottery_flag(param('notify_winner', (int)$old['notify_winner']));
+            // windows_enabled=0 只让时段失效, 不动 windows 配置 (后台关开关后仍会原样提交 windows)
+            $cfg['windows_enabled'] = lottery_flag(param('windows_enabled', (int)$old['windows_enabled']));
+            $cfg['start_date'] = lottery_config_validate_date('活动开始日期', param('start_date', $old['start_date']));
+            $cfg['end_date'] = lottery_config_validate_date('活动结束日期', param('end_date', $old['end_date']));
+            if ($cfg['start_date'] !== '' && $cfg['end_date'] !== '' && $cfg['end_date'] < $cfg['start_date']) {
+                json_error('结束日期不能早于开始日期');
+            }
+            $cfg['windows'] = lottery_config_validate_windows(param('windows', $old['windows']));
+            lottery_config_save($cfg);
             json_out(lottery_config());
+
+        case 'admin_lottery_window_preview':
+            require_admin();
+            $pcfg = lottery_config();
+            $pwin = lottery_window_state($pcfg);
+            $pwin['daily_total_left'] = lottery_daily_total_left($pcfg);
+            $pwin['daily_total_limit'] = (int)$pcfg['daily_total_limit'];
+            json_out($pwin);
 
         case 'admin_lottery_draws':
             require_admin();
@@ -3837,15 +3924,270 @@ function notify_push_all(string $title, string $content, string $type = 'admin',
 
 // ==================== 抽奖系统辅助函数 ====================
 
+/** 抽奖配置文本字段长度统一定义(错误文案) */
+function lottery_cfg_ts(?int $ts = null): int
+{
+    if ($ts !== null) return $ts;
+    try {
+        $st = db()->query('SELECT UNIX_TIMESTAMP(NOW())');
+        $v = (int)$st->fetchColumn();
+        if ($v > 0) return $v;
+    } catch (Exception $e) { error_log('[lottery_cfg_ts] ' . $e->getMessage()); }
+    return time();
+}
+
+/** 0/1 开关归一化: 兼容 bool / 1 / 0 / "1" / "0" / "true" / "false" / "on" / "off" (JSON body 里可能是布尔) */
+function lottery_flag($v): int
+{
+    if (is_bool($v)) return $v ? 1 : 0;
+    if (is_int($v) || is_float($v)) return ((int)$v === 1) ? 1 : 0;
+    $s = strtolower(trim((string)$v));
+    return in_array($s, ['1', 'true', 'on', 'yes'], true) ? 1 : 0;
+}
+
+/** 把 HH:MM 解析成 [h, m], 不合法返回 null */
+function lottery_cfg_hm(string $v): ?array
+{
+    if (preg_match('/^(\d{1,2}):(\d{1,2})$/', trim($v), $m)) {
+        $h = (int)$m[1]; $i = (int)$m[2];
+        if ($h >= 0 && $h <= 23 && $i >= 0 && $i <= 59) return [$h, $i];
+    }
+    return null;
+}
+
+/** 按 daily_reset_time 切分的「今日」区间 [startTs, endTs) */
+function lottery_day_window(array $cfg, ?int $ts = null): array
+{
+    $ts = lottery_cfg_ts($ts);
+    $hm = lottery_cfg_hm((string)($cfg['daily_reset_time'] ?? '00:00'));
+    if (!$hm) $hm = [0, 0];
+    $b = mktime($hm[0], $hm[1], 0, (int)date('n', $ts), (int)date('j', $ts), (int)date('Y', $ts));
+    if ($b !== false && $b > $ts) {
+        $b = mktime($hm[0], $hm[1], 0, (int)date('n', $ts), (int)date('j', $ts) - 1, (int)date('Y', $ts));
+    }
+    return [$b, $b + 86400];
+}
+
+/** 本周区间 [startTs, endTs): 周一(按 daily_reset_time 时刻)起算 */
+function lottery_week_window(array $cfg, ?int $ts = null): array
+{
+    $ts = lottery_cfg_ts($ts);
+    $hm = lottery_cfg_hm((string)($cfg['daily_reset_time'] ?? '00:00'));
+    if (!$hm) $hm = [0, 0];
+    $monday = mktime($hm[0], $hm[1], 0, (int)date('n', $ts), (int)date('j', $ts), (int)date('Y', $ts));
+    if ($monday !== false && $monday > $ts) $monday -= 86400;
+    $dow = (int)date('N', $monday); // 1=周一 .. 7=周日
+    $start = $monday - ($dow - 1) * 86400;
+    return [$start, $start + 7 * 86400];
+}
+
+/** 某时刻是否命中开放时段 (不含日期范围/开关判断) */
+function lottery_window_ts_open(array $cfg, int $ts): bool
+{
+    if ((int)($cfg['windows_enabled'] ?? 0) !== 1) return true;
+    $ws = is_array($cfg['windows'] ?? null) ? $cfg['windows'] : [];
+    if (!$ws) return true;
+    $cur = (int)date('G', $ts) * 60 + (int)date('i', $ts);
+    $dow = (int)date('N', $ts);   // 1=周一
+    $prevDow = $dow === 1 ? 7 : $dow - 1;
+    foreach ($ws as $w) {
+        if (!is_array($w)) continue;
+        $a = lottery_cfg_hm((string)($w['start'] ?? ''));
+        $b = lottery_cfg_hm((string)($w['end'] ?? ''));
+        if (!$a || !$b) continue;
+        $days = isset($w['days']) && is_array($w['days']) ? $w['days'] : [];
+        $s = $a[0] * 60 + $a[1];
+        $e = $b[0] * 60 + $b[1];
+        $has = function ($d) use ($days) {
+            if (!$days) return true;
+            foreach ($days as $x) { if ((int)$x === $d) return true; }
+            return false;
+        };
+        if ($s === $e) { if ($has($dow)) return true; continue; }
+        if ($s < $e) {
+            if ($has($dow) && $cur >= $s && $cur < $e) return true;
+        } else {
+            if ($has($dow) && $cur >= $s) return true;          // 今天的段跨到明天凌晨
+            if ($has($prevDow) && $cur < $e) return true;       // 今天凌晨属于昨天开始的段
+        }
+    }
+    return false;
+}
+
+/** 日期范围判断: '' / -1 可抽, 1 未开始, 2 已结束 */
+function lottery_date_range_state(array $cfg, int $ts): int
+{
+    $today = date('Y-m-d', $ts);
+    $sd = (string)($cfg['start_date'] ?? '');
+    $ed = (string)($cfg['end_date'] ?? '');
+    if ($sd !== '' && $today < $sd) return 1;
+    if ($ed !== '' && $today > $ed) return 2;
+    return -1;
+}
+
+/** 距离最近一次开放(现在已开放则 0), 扫描 8 天; -1 表示 8 天内没有可开放的时段 */
+function lottery_next_open_seconds(array $cfg, int $ts): int
+{
+    if ((int)($cfg['windows_enabled'] ?? 0) !== 1) return 0;
+    $ws = is_array($cfg['windows'] ?? null) ? $cfg['windows'] : [];
+    if (!$ws) return 0;
+    if (lottery_window_ts_open($cfg, $ts)) return 0;
+    $base = $ts - ($ts % 60);
+    for ($k = 1; $k <= 11520; $k++) {
+        $t = $base + $k * 60;
+        if (lottery_window_ts_open($cfg, $t)) return $t - $ts;
+    }
+    return -1;
+}
+
+/** 把 windows 配置拼成给用户看的文案: 每天 19:30-20:00 */
+function lottery_windows_text(array $cfg): string
+{
+    if ((int)($cfg['windows_enabled'] ?? 0) !== 1) return '';
+    $ws = is_array($cfg['windows'] ?? null) ? $cfg['windows'] : [];
+    if (!$ws) return '';
+    $names = [1 => '周一', 2 => '周二', 3 => '周三', 4 => '周四', 5 => '周五', 6 => '周六', 7 => '周日'];
+    $out = [];
+    foreach ($ws as $w) {
+        if (!is_array($w)) continue;
+        $a = lottery_cfg_hm((string)($w['start'] ?? ''));
+        $b = lottery_cfg_hm((string)($w['end'] ?? ''));
+        if (!$a || !$b) continue;
+        $days = isset($w['days']) && is_array($w['days']) ? array_values(array_unique(array_map('intval', $w['days']))) : [];
+        sort($days);
+        $ds = [];
+        foreach ($days as $d) { if (isset($names[$d])) $ds[] = $names[$d]; }
+        $prefix = $ds ? implode('、', $ds) : '每天';
+        $out[] = $prefix . ' ' . sprintf('%02d:%02d', $a[0], $a[1]) . '-' . sprintf('%02d:%02d', $b[0], $b[1]);
+    }
+    return implode('; ', $out);
+}
+
+/** 抽奖开放状态全量 */
+function lottery_window_state(array $cfg, ?int $ts = null): array
+{
+    $now = lottery_cfg_ts($ts);
+    $serverTime = date('Y-m-d H:i:s', $now);
+    $res = [
+        'open' => false, 'reason' => 'open', 'reason_text' => '', 'text' => '',
+        'next_open_at' => '', 'next_close_at' => '',
+        'seconds_to_open' => 0, 'seconds_to_close' => 0,
+        'server_time' => $serverTime, 'my_allowed' => true,
+    ];
+    if ((int)($cfg['enabled'] ?? 0) !== 1) {
+        $res['reason'] = 'disabled'; $res['reason_text'] = '抽奖活动已关闭'; $res['my_allowed'] = false;
+        return $res;
+    }
+    $range = lottery_date_range_state($cfg, $now);
+    if ($range === 1) {
+        $res['reason'] = 'before_start'; $res['reason_text'] = '抽奖活动还没开始'; $res['my_allowed'] = false;
+        return $res;
+    }
+    if ($range === 2) {
+        $res['reason'] = 'after_end'; $res['reason_text'] = '抽奖活动已经结束'; $res['my_allowed'] = false;
+        return $res;
+    }
+    if ((int)($cfg['windows_enabled'] ?? 0) !== 1 || !is_array($cfg['windows'] ?? null) || !$cfg['windows']) {
+        $res['open'] = true; $res['reason'] = 'open'; $res['reason_text'] = ''; $res['text'] = '';
+        return $res;
+    }
+    $res['text'] = lottery_windows_text($cfg);
+    if (!lottery_window_ts_open($cfg, $now)) {
+        $left = lottery_next_open_seconds($cfg, $now);
+        if ($left > 0) {
+            $res['seconds_to_open'] = $left;
+            $res['next_open_at'] = date('Y-m-d H:i:s', $now + $left);
+        }
+        $res['reason'] = 'outside_window';
+        $res['reason_text'] = '现在不在抽奖时间内';
+        $res['my_allowed'] = false;
+        return $res;
+    }
+    $res['open'] = true; $res['reason'] = 'open'; $res['reason_text'] = '';
+    $k = 1;
+    while ($k <= 11520 && lottery_window_ts_open($cfg, $now + $k * 60)) $k++;
+    if ($k <= 11520) {
+        $res['seconds_to_close'] = $k * 60 - ($now % 60);
+        $res['next_close_at'] = date('Y-m-d H:i:s', $now + $res['seconds_to_close']);
+    }
+    return $res;
+}
+
+/** 距上次抽奖还差多少秒 (0 = 可以抽) */
+function lottery_cooldown_left(array $me): int
+{
+    $cfg = lottery_config();
+    $cd = (int)($cfg['cooldown_seconds'] ?? 0);
+    if ($cd <= 0) return 0;
+    try {
+        $st = db()->prepare('SELECT UNIX_TIMESTAMP(MAX(created_at)) FROM lottery_draws WHERE user_id = ?');
+        $st->execute([(int)$me['id']]);
+        $last = (int)($st->fetchColumn() ?: 0);
+    } catch (Exception $e) { error_log('[lottery_cooldown_left] ' . $e->getMessage()); return 0; }
+    if ($last <= 0) return 0;
+    $left = $last + $cd - lottery_cfg_ts();
+    return $left > 0 ? $left : 0;
+}
+
+/** 今天全站还能发出多少张; 返回 -1 表示不限 */
+function lottery_daily_total_left(?array $cfg = null): int
+{
+    if ($cfg === null) $cfg = lottery_config();
+    $lim = (int)($cfg['daily_total_limit'] ?? 0);
+    if ($lim <= 0) return -1;
+    list($ws, $we) = lottery_day_window($cfg);
+    try {
+        $st = db()->prepare('SELECT COUNT(*) FROM lottery_draws WHERE created_at >= ? AND created_at < ?');
+        $st->execute([date('Y-m-d H:i:s', $ws), date('Y-m-d H:i:s', $we)]);
+        $n = (int)$st->fetchColumn();
+    } catch (Exception $e) { error_log('[lottery_daily_total_left] ' . $e->getMessage()); return $lim; }
+    $left = $lim - $n;
+    return $left > 0 ? $left : 0;
+}
+
+/** 某用户本周抽了几次 (按 week_window 边界) */
+function lottery_drawn_count_week(int $userId): int
+{
+    $cfg = lottery_config();
+    list($ws, $we) = lottery_week_window($cfg);
+    $st = db()->prepare('SELECT COUNT(*) FROM lottery_draws d
+            LEFT JOIN users u ON u.id = d.user_id
+            WHERE d.user_id = ? AND d.created_at >= ? AND d.created_at < ?
+              AND (u.lottery_day_reset_at IS NULL OR d.created_at > u.lottery_day_reset_at)');
+    $st->execute([$userId, date('Y-m-d H:i:s', $ws), date('Y-m-d H:i:s', $we)]);
+    return (int)$st->fetchColumn();
+}
+
+/** 某用户本周还能抽几次; 返回 -1 表示不限 */
+function lottery_weekly_left_for(array $user): int
+{
+    $wk = (int)(lottery_config()['week_limit'] ?? 0);
+    if ($wk <= 0) return -1;
+    return max(0, $wk - lottery_drawn_count_week((int)$user['id']));
+}
+
 /** 抽奖活动配置 (存在 settings.lottery_config) */
 function lottery_config(): array
 {
     $cfg = [
-        'enabled'        => 0,
-        'title'          => '免费抽卡密',
-        'content'        => '',
-        'per_user_limit' => 1,
-        'daily_limit'    => 0,
+        'enabled'          => 0,
+        'title'            => '免费抽卡密',
+        'content'          => '',
+        'success_text'     => '',
+        'empty_text'       => '奖品已抽完, 请稍后再来',
+        'per_user_limit'   => 1,
+        'daily_limit'      => 0,
+        'week_limit'       => 0,
+        'daily_reset_time' => '00:00',
+        'cooldown_seconds' => 0,
+        'daily_total_limit' => 0,
+        'windows_enabled'  => 0,
+        'windows'          => [],
+        'start_date'       => '',
+        'end_date'         => '',
+        'show_prizes'      => 1,
+        'show_stock'       => 1,
+        'notify_winner'    => 1,
     ];
     try {
         $st = db()->prepare('SELECT `value` FROM `settings` WHERE `key` = ?');
@@ -3856,11 +4198,49 @@ function lottery_config(): array
             if (is_array($j)) $cfg = array_merge($cfg, $j);
         }
     } catch (Exception $e) { error_log('[lottery_config] ' . $e->getMessage()); }
-    $cfg['enabled'] = ((int)$cfg['enabled'] === 1) ? 1 : 0;
-    $cfg['per_user_limit'] = max(0, (int)$cfg['per_user_limit']);
-    $cfg['daily_limit'] = max(0, (int)($cfg['daily_limit'] ?? 0));
+    $clamp = function ($v, $min, $max) { $v = (int)$v; if ($v < $min) $v = $min; if ($v > $max) $v = $max; return $v; };
+    $cfg['enabled'] = lottery_flag($cfg['enabled']);
     $cfg['title'] = (string)$cfg['title'];
+    if ($cfg['title'] === '') $cfg['title'] = '免费抽卡密';
     $cfg['content'] = (string)$cfg['content'];
+    $cfg['success_text'] = (string)($cfg['success_text'] ?? '');
+    $cfg['empty_text'] = (string)($cfg['empty_text'] ?? '');
+    if ($cfg['empty_text'] === '') $cfg['empty_text'] = '奖品已抽完, 请稍后再来';
+    $cfg['per_user_limit'] = $clamp($cfg['per_user_limit'] ?? 1, 0, 9999);
+    $cfg['daily_limit'] = $clamp($cfg['daily_limit'] ?? 0, 0, 999);
+    $cfg['week_limit'] = $clamp($cfg['week_limit'] ?? 0, 0, 999);
+    $cfg['cooldown_seconds'] = $clamp($cfg['cooldown_seconds'] ?? 0, 0, 86400);
+    $cfg['daily_total_limit'] = $clamp($cfg['daily_total_limit'] ?? 0, 0, 999999);
+    $rt = (string)($cfg['daily_reset_time'] ?? '00:00');
+    if (!lottery_cfg_hm($rt)) $rt = '00:00';
+    $hm = lottery_cfg_hm($rt);
+    $cfg['daily_reset_time'] = sprintf('%02d:%02d', $hm[0], $hm[1]);
+    $cfg['windows_enabled'] = lottery_flag($cfg['windows_enabled'] ?? 0);
+    $wins = [];
+    if (is_array($cfg['windows'] ?? null)) {
+        foreach ($cfg['windows'] as $w) {
+            if (!is_array($w)) continue;
+            $a = lottery_cfg_hm((string)($w['start'] ?? ''));
+            $b = lottery_cfg_hm((string)($w['end'] ?? ''));
+            if (!$a || !$b) continue;
+            if ($a[0] * 60 + $a[1] === $b[0] * 60 + $b[1]) continue;
+            $days = [];
+            if (isset($w['days']) && is_array($w['days'])) {
+                foreach ($w['days'] as $d) { $d = (int)$d; if ($d >= 1 && $d <= 7) $days[] = $d; }
+                $days = array_values(array_unique($days)); sort($days);
+            }
+            $wins[] = ['start' => sprintf('%02d:%02d', $a[0], $a[1]), 'end' => sprintf('%02d:%02d', $b[0], $b[1]), 'days' => $days];
+            if (count($wins) >= 10) break;
+        }
+    }
+    $cfg['windows'] = $wins;
+    $sd = (string)($cfg['start_date'] ?? '');
+    $cfg['start_date'] = preg_match('/^\d{4}-\d{2}-\d{2}$/', $sd) ? $sd : '';
+    $ed = (string)($cfg['end_date'] ?? '');
+    $cfg['end_date'] = preg_match('/^\d{4}-\d{2}-\d{2}$/', $ed) ? $ed : '';
+    $cfg['show_prizes'] = lottery_flag($cfg['show_prizes'] ?? 1);
+    $cfg['show_stock'] = lottery_flag($cfg['show_stock'] ?? 1);
+    $cfg['notify_winner'] = lottery_flag($cfg['notify_winner'] ?? 1);
     return $cfg;
 }
 
@@ -3870,6 +4250,73 @@ function lottery_config_save(array $cfg): void
     $json = json_encode($cfg, JSON_UNESCAPED_UNICODE);
     db()->prepare('INSERT INTO `settings` (`key`, `value`) VALUES (?, ?) ON DUPLICATE KEY UPDATE `value` = VALUES(`value`)')
         ->execute(['lottery_config', $json]);
+}
+
+/** 后台保存抽奖配置时的逐项校验 (错误文案固定, 见契约 B 节) */
+function lottery_config_validate_time($v): string
+{
+    $v = trim((string)$v);
+    if (!lottery_cfg_hm($v)) json_error('每日重置时间格式不对, 应该是 HH:MM');
+    $hm = lottery_cfg_hm($v);
+    return sprintf('%02d:%02d', $hm[0], $hm[1]);
+}
+
+function lottery_config_validate_text(string $field, $v, int $max): string
+{
+    $v = (string)$v;
+    if (mb_strlen($v) > $max) json_error($field . '不能超过 ' . $max . ' 个字');
+    return $v;
+}
+
+/** 校验 windows 列表, 返回归一化后的数组 */
+function lottery_config_validate_windows($ws): array
+{
+    if (!is_array($ws)) json_error('抽奖时段格式不对, 应该是 HH:MM-HH:MM');
+    if (count($ws) > 10) json_error('抽奖时段最多 10 条');
+    $out = [];
+    foreach ($ws as $w) {
+        if (!is_array($w)) json_error('抽奖时段格式不对, 应该是 HH:MM-HH:MM');
+        $a = lottery_cfg_hm((string)($w['start'] ?? ''));
+        $b = lottery_cfg_hm((string)($w['end'] ?? ''));
+        if (!$a || !$b) json_error('抽奖时段格式不对, 应该是 HH:MM-HH:MM');
+        if ($a[0] * 60 + $a[1] === $b[0] * 60 + $b[1]) json_error('抽奖时段开始和结束时间不能相同');
+        $days = [];
+        if (isset($w['days']) && $w['days'] !== '' && $w['days'] !== null) {
+            if (!is_array($w['days'])) json_error('星期只能是 1-7');
+            foreach ($w['days'] as $d) {
+                $d = (int)$d;
+                if ($d < 1 || $d > 7) json_error('星期只能是 1-7');
+                $days[] = $d;
+            }
+            $days = array_values(array_unique($days)); sort($days);
+        }
+        $out[] = [
+            'start' => sprintf('%02d:%02d', $a[0], $a[1]),
+            'end'   => sprintf('%02d:%02d', $b[0], $b[1]),
+            'days'  => $days,
+        ];
+    }
+    return $out;
+}
+
+/** 校验 YYYY-MM-DD, 空串放行 */
+function lottery_config_validate_date(string $field, $v): string
+{
+    $v = trim((string)$v);
+    if ($v === '') return '';
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $v)) json_error($field . '格式不对, 应该是 YYYY-MM-DD');
+    $p = explode('-', $v);
+    if (!checkdate((int)$p[1], (int)$p[2], (int)$p[0])) json_error($field . '格式不对, 应该是 YYYY-MM-DD');
+    return $v;
+}
+
+function lottery_config_validate_zero(array $cfg): void
+{
+    if ((int)$cfg['cooldown_seconds'] > 86400) json_error('冷却时间不能超过 86400 秒');
+    if ((int)$cfg['week_limit'] > 999) json_error('每周抽奖次数不能超过 999');
+    if ((int)$cfg['daily_total_limit'] > 999999) json_error('今天发放上限不能超过 999999');
+    if (mb_strlen((string)$cfg['success_text']) > 200) json_error('提示文案不能超过 200 个字');
+    if (mb_strlen((string)$cfg['empty_text']) > 200) json_error('提示文案不能超过 200 个字');
 }
 
 /** 某用户已经抽了几次 (users.lottery_reset_at 之前的老记录不算, 这样后台能一键重置次数) */
@@ -3882,18 +4329,20 @@ function lottery_drawn_count(int $userId): int
     return (int)$st->fetchColumn();
 }
 
-/** 某用户今天抽了几次 (用于「每日抽奖机会」限制) */
+/** 某用户今天抽了几次 (按 daily_reset_time 切分的今日边界) */
 function lottery_drawn_count_today(int $userId): int
 {
+    $cfg = lottery_config();
+    list($ws, $we) = lottery_day_window($cfg);
     $st = db()->prepare('SELECT COUNT(*) FROM lottery_draws d
             LEFT JOIN users u ON u.id = d.user_id
-            WHERE d.user_id = ? AND DATE(d.created_at) = CURDATE()
+            WHERE d.user_id = ? AND d.created_at >= ? AND d.created_at < ?
               AND (u.lottery_day_reset_at IS NULL OR d.created_at > u.lottery_day_reset_at)');
-    $st->execute([$userId]);
+    $st->execute([$userId, date('Y-m-d H:i:s', $ws), date('Y-m-d H:i:s', $we)]);
     return (int)$st->fetchColumn();
 }
 
-/** 今天还能抽几次; 返回 -1 表示不限制 */
+/** 今天(按 daily_reset_time 边界)还能抽几次; 返回 -1 表示不限制 */
 function lottery_daily_left_for(array $user): int
 {
     $daily = (int)(lottery_config()['daily_limit'] ?? 0);
@@ -3913,25 +4362,48 @@ function lottery_left_for(array $user): int
     $left = max(0, $quota - lottery_drawn_count((int)$user['id']));
     $dailyLeft = lottery_daily_left_for($user);
     if ($dailyLeft >= 0) $left = min($left, $dailyLeft);
+    $weekLeft = lottery_weekly_left_for($user);
+    if ($weekLeft >= 0) $left = min($left, $weekLeft);
     return $left;
 }
 
 /**
- * 抽一次奖: 从「启用的奖项 + 还没被用过的卡密」里随机取一张, 标记为已用并写中奖记录。
- * 全程在事务里做, 保证同一张卡密不会发给两个人。
+ * 抽一次奖: 先按奖项 weight 加权随机选一个「有库存的启用奖项」, 再从该奖项里随机取一张没用过的卡密,
+ * 标记为已用并写中奖记录。全程在事务里做, 保证同一张卡密不会发给两个人。
  */
 function lottery_draw_once(int $userId): array
 {
     $pdo = db();
     $pdo->beginTransaction();
     try {
+        $st = $pdo->prepare('SELECT p.id,p.name,p.card_type,p.weight,
+                (SELECT COUNT(*) FROM lottery_codes c WHERE c.prize_id = p.id AND c.user_id = 0) AS stock
+            FROM lottery_prizes p WHERE p.is_active = 1');
+        $st->execute();
+        $pool = [];
+        $total = 0;
+        foreach ($st->fetchAll() as $p) {
+            $stock = (int)$p['stock'];
+            if ($stock <= 0) continue;
+            $w = (int)($p['weight'] ?? 0);
+            if ($w <= 0) $w = 100;
+            $pool[] = ['id' => (int)$p['id'], 'w' => $w, 'stock' => $stock];
+            $total += $w;
+        }
+        if ($total <= 0) { $pdo->rollBack(); json_error((string)lottery_config()['empty_text']); }
+        $r = random_int(1, $total);
+        $pick = $pool[0];
+        foreach ($pool as $p) {
+            $r -= $p['w'];
+            if ($r <= 0) { $pick = $p; break; }
+        }
         $st = $pdo->prepare('SELECT c.id AS code_id, c.code, p.id AS prize_id, p.name AS prize_name, p.card_type
             FROM lottery_codes c INNER JOIN lottery_prizes p ON p.id = c.prize_id
-            WHERE c.user_id = 0 AND p.is_active = 1
+            WHERE c.user_id = 0 AND p.id = ?
             ORDER BY RAND() LIMIT 1 FOR UPDATE');
-        $st->execute();
+        $st->execute([$pick['id']]);
         $row = $st->fetch();
-        if (!$row) { $pdo->rollBack(); json_error('奖品已抽完, 请稍后再来'); }
+        if (!$row) { $pdo->rollBack(); json_error((string)lottery_config()['empty_text']); }
         $pdo->prepare('UPDATE lottery_codes SET user_id = ?, used_at = NOW() WHERE id = ? AND user_id = 0')
             ->execute([$userId, (int)$row['code_id']]);
         $pdo->prepare('INSERT INTO lottery_draws (user_id, prize_id, code_id, code, created_at) VALUES (?, ?, ?, ?, NOW())')
