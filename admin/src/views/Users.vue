@@ -29,6 +29,9 @@
         <a-button type="primary" @click="openUser()">
           <template #icon><icon-plus /></template>新增用户
         </a-button>
+        <a-button @click="openQuotaAll">
+          <template #icon><icon-gift /></template>一键设置所有人抽奖次数
+        </a-button>
         <a-button :loading="loading" @click="load">
           <template #icon><icon-refresh /></template>刷新
         </a-button>
@@ -77,6 +80,15 @@
                 <span class="m-card-label">注册时间</span>
                 <span class="m-card-value">{{ record.created_at || '-' }}</span>
               </div>
+              <div class="m-card-row">
+                <span class="m-card-label">抽奖次数</span>
+                <span class="m-card-value">
+                  <a-tag size="small" :color="quotaOf(record) === -1 ? 'gray' : 'arcoblue'">
+                    {{ quotaOf(record) === -1 ? '默认' : ('设为 ' + quotaOf(record)) }}
+                  </a-tag>
+                  <span class="muted">剩余 {{ qnum(record.lottery_left) }} / 已抽 {{ qnum(record.lottery_drawn) }}</span>
+                </span>
+              </div>
               <div class="m-card-actions">
                 <a-button type="text" size="small" @click="openUser(record)">编辑</a-button>
                 <a-button type="text" size="small" @click="openMute(record)">禁言</a-button>
@@ -84,6 +96,7 @@
                 <a-button type="text" size="small" :status="Number(record.is_active) ? 'warning' : 'success'" @click="toggleActive(record)">
                   {{ Number(record.is_active) ? '禁用' : '启用' }}
                 </a-button>
+                <a-button type="text" size="small" @click="openQuota(record)">设置抽奖次数</a-button>
                 <a-button type="text" status="danger" size="small" @click="delUser(record)">删除</a-button>
               </div>
             </div>
@@ -104,7 +117,7 @@
         />
       </template>
       <template v-else>
-      <!-- 列宽合计 1372, 手机端由 tableScroll 兜底 >=720 -->
+      <!-- 列宽合计 1602 (原 1372 + 抽奖次数 170 + 操作列加宽 60), 手机端由 tableScroll 兜底 >=720 -->
       <a-table
         :data="list"
         row-key="id"
@@ -153,8 +166,18 @@
               </a-tag>
             </template>
           </a-table-column>
+          <a-table-column title="抽奖次数" :width="170">
+            <template #cell="{ record }">
+              <div class="quota-cell">
+                <a-tag size="small" :color="quotaOf(record) === -1 ? 'gray' : 'arcoblue'">
+                  {{ quotaOf(record) === -1 ? '默认' : ('设为 ' + quotaOf(record)) }}
+                </a-tag>
+                <span class="muted">剩余 {{ qnum(record.lottery_left) }} / 已抽 {{ qnum(record.lottery_drawn) }}</span>
+              </div>
+            </template>
+          </a-table-column>
           <a-table-column title="注册时间" data-index="created_at" :width="180" />
-          <a-table-column title="操作" :width="280" fixed="right">
+          <a-table-column title="操作" :width="340" fixed="right">
             <template #cell="{ record }">
               <a-button type="text" size="small" @click="openUser(record)">编辑</a-button>
               <a-button type="text" size="small" @click="openMute(record)">禁言</a-button>
@@ -162,6 +185,7 @@
               <a-button type="text" size="small" :status="Number(record.is_active) ? 'warning' : 'success'" @click="toggleActive(record)">
                 {{ Number(record.is_active) ? '禁用' : '启用' }}
               </a-button>
+              <a-button type="text" size="small" @click="openQuota(record)">设置抽奖次数</a-button>
               <a-button type="text" status="danger" size="small" @click="delUser(record)">删除</a-button>
             </template>
           </a-table-column>
@@ -270,6 +294,55 @@
         </div>
       </a-form>
     </a-modal>
+
+    <!-- 设置单个用户的抽奖次数 -->
+    <a-modal
+      v-model:visible="showQuota"
+      title="设置抽奖次数"
+      :width="modalWidth(480)"
+      :ok-loading="quotaSaving"
+      ok-text="保存"
+      cancel-text="取消"
+      unmount-on-close
+      @ok="saveQuota"
+    >
+      <a-form :model="quotaForm" layout="vertical">
+        <div class="mute-target">
+          设置用户：
+          <span class="mute-name">{{ quotaForm.nickname || quotaForm.username }}</span>
+          <span class="mute-id">(ID {{ quotaForm.user_id }})</span>
+        </div>
+        <a-form-item label="抽奖次数">
+          <a-input-number v-model="quotaForm.quota" :min="-1" :precision="0" style="width: 100%" />
+          <div class="form-tip">
+            -1 = 跟随活动默认每人次数；&gt;=0 = 该用户总共可抽这么多次
+            (该用户当前已抽 {{ quotaForm.drawn }} 次，剩余会自动按已抽次数计算)。
+          </div>
+        </a-form-item>
+      </a-form>
+    </a-modal>
+
+    <!-- 一键设置所有人抽奖次数 (二次确认后生效) -->
+    <a-modal
+      v-model:visible="showQuotaAll"
+      title="一键设置所有人抽奖次数"
+      :width="modalWidth(480)"
+      :ok-loading="quotaSavingAll"
+      ok-text="确定"
+      cancel-text="取消"
+      unmount-on-close
+      @ok="saveQuotaAll"
+    >
+      <a-form layout="vertical">
+        <a-form-item label="抽奖次数">
+          <a-input-number v-model="quotaAll" :min="-1" :precision="0" style="width: 100%" />
+          <div class="form-tip">
+            -1 = 所有用户跟随活动默认每人次数；&gt;=0 = 每个用户总共可抽这么多次
+            (会覆盖所有用户已有的单独设置，不可撤销)。
+          </div>
+        </a-form-item>
+      </a-form>
+    </a-modal>
   </div>
 </template>
 
@@ -287,8 +360,8 @@ const kw = ref('')
 const filterRole = ref('')
 const filterActive = ref('')
 
-// 表格横向滚动宽度: 所有列宽合计 1372px (桌面按此宽度, 手机端至少 720px)
-const scrollX = tableScroll(1372)
+// 表格横向滚动宽度: 所有列宽合计 1602px (桌面按此宽度, 手机端至少 720px)
+const scrollX = tableScroll(1602)
 
 // 分页: 服务端分页, 桌面端表格与手机端卡片共用同一 pagination
 const pagination = ref({
@@ -543,12 +616,113 @@ function delUser(record) {
   })
 }
 
+// ===== 抽奖次数 (与活动设置里的「默认每人抽奖次数」配合) =====
+
+/** lottery_quota: -1(或字段缺失) = 跟随活动默认; >=0 = 单独设置 */
+function quotaOf(record) {
+  const v = record ? record.lottery_quota : undefined
+  if (v === undefined || v === null || v === '') return -1
+  const n = Number(v)
+  return Number.isFinite(n) ? n : -1
+}
+
+/** 剩余 / 已抽次数兜底成数字 */
+function qnum(v) {
+  const n = Number(v)
+  return Number.isFinite(n) ? n : 0
+}
+
+// 单个用户
+const showQuota = ref(false)
+const quotaSaving = ref(false)
+const quotaForm = ref({ user_id: 0, username: '', nickname: '', quota: -1, drawn: 0 })
+
+function openQuota(record) {
+  quotaForm.value = {
+    user_id: Number(record.id) || 0,
+    username: record.username || '',
+    nickname: record.nickname || '',
+    quota: quotaOf(record),
+    drawn: qnum(record.lottery_drawn),
+  }
+  showQuota.value = true
+}
+
+/** 保存单个用户抽奖次数: -1 = 跟随默认, >=0 = 总共可抽次数 */
+async function saveQuota() {
+  const f = quotaForm.value
+  const quota = Number(f.quota)
+  if (!Number.isFinite(quota) || quota < -1 || Math.floor(quota) !== quota) {
+    Message.warning('抽奖次数必须是 -1 或 >=0 的整数')
+    return
+  }
+  quotaSaving.value = true
+  try {
+    const r = await api('admin_lottery_quota_set', { user_id: Number(f.user_id) || 0, quota }, 'POST')
+    if (r.code !== 0) {
+      if (r.code !== 401) Message.error(r.msg || '设置失败')
+      return
+    }
+    showQuota.value = false
+    Message.success('已保存')
+    load()
+  } finally {
+    quotaSaving.value = false
+  }
+}
+
+// 全部用户
+const showQuotaAll = ref(false)
+const quotaSavingAll = ref(false)
+const quotaAll = ref(-1)
+
+function openQuotaAll() {
+  quotaAll.value = -1
+  showQuotaAll.value = true
+}
+
+/** 一键设置所有人: 先二次确认, 再调 admin_lottery_quota_all */
+function saveQuotaAll() {
+  const quota = Number(quotaAll.value)
+  if (!Number.isFinite(quota) || quota < -1 || Math.floor(quota) !== quota) {
+    Message.warning('抽奖次数必须是 -1 或 >=0 的整数')
+    return
+  }
+  showQuotaAll.value = false
+  Modal.warning({
+    title: '确认修改所有用户?',
+    content: `将把所有用户的抽奖次数设为 ${quota}，是否继续？` +
+      (quota === -1 ? '（-1 = 跟随活动默认每人次数）' : '（所有用户原有的单独设置都会被覆盖）'),
+    okText: '继续',
+    cancelText: '取消',
+    hideCancel: false,
+    onOk: async () => {
+      quotaSavingAll.value = true
+      try {
+        const r = await api('admin_lottery_quota_all', { quota }, 'POST')
+        if (r.code !== 0) {
+          if (r.code !== 401) Message.error(r.msg || '设置失败')
+          return false
+        }
+        Message.success(`已更新 ${qnum(r.data && r.data.updated)} 个用户`)
+        load()
+        return true
+      } finally {
+        quotaSavingAll.value = false
+      }
+    },
+  })
+}
+
 onMounted(load)
 </script>
 
 <style scoped>
 /* 桌面端把操作按钮推到右侧; 手机端隐藏(按钮换行平分) */
 .toolbar-spacer { flex: 1 1 auto; min-width: 0; }
+
+.muted { color: var(--color-text-3); font-size: 12px; }
+.quota-cell { display: flex; flex-direction: column; gap: 2px; line-height: 1.4; }
 
 .user-name { font-weight: 600; }
 .mute-target { margin-bottom: 14px; font-size: 13px; color: var(--color-text-2); }
