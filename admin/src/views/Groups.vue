@@ -12,6 +12,11 @@
       <span class="muted">共 {{ list.length }} 个群组</span>
     </div>
 
+    <!-- 服务端尚未部署 all_muted 字段时明确提示, 避免开关点了没反应却看不出来 -->
+    <div v-if="!allMuteSupported" class="allmute-warn">
+      当前服务端未返回「全体禁言」(all_muted) 字段, 该功能暂不可用, 需等服务端部署完成后生效。
+    </div>
+
     <!-- ============ 手机端: 卡片列表 (替代必须横滑的表格) ============ -->
     <template v-if="isMobile">
       <a-spin :loading="loading" style="width: 100%">
@@ -45,6 +50,21 @@
               <span class="m-card-value">{{ record.message_count ?? 0 }}</span>
             </div>
             <div class="m-card-row">
+              <span class="m-card-label">全体禁言</span>
+              <span class="m-card-value">
+                <a-switch
+                  size="small"
+                  :model-value="isAllMuted(record)"
+                  :loading="allMuteBusyId === Number(record.id)"
+                  :disabled="!allMuteSupported"
+                  @change="(v) => toggleAllMute(record, v)"
+                >
+                  <template #checked>已开启</template>
+                  <template #unchecked>未开启</template>
+                </a-switch>
+              </span>
+            </div>
+            <div class="m-card-row">
               <span class="m-card-label">创建时间</span>
               <span class="m-card-value">{{ record.created_at || '-' }}</span>
             </div>
@@ -68,7 +88,7 @@
     </template>
 
     <!-- ============ 桌面端: 表格 ============ -->
-    <!-- 横向总宽: 70+140+110+240+80+90+100+180+200 = 1210 -->
+    <!-- 横向总宽: 70+140+110+240+80+90+100+110+180+200 = 1320 -->
     <a-table v-else :data="list" :loading="loading" row-key="id" size="small" :scroll="scrollX">
       <template #columns>
         <a-table-column title="ID" data-index="id" :width="70" />
@@ -102,6 +122,22 @@
             <a-tag :color="Number(record.is_active) ? 'green' : 'gray'">
               {{ Number(record.is_active) ? '启用' : '停用' }}
             </a-tag>
+          </template>
+        </a-table-column>
+
+        <a-table-column title="全体禁言" :width="110">
+          <template #cell="{ record }">
+            <!-- 行内直接切换: 受控开关 (model-value 绑定行数据), 保存成功后由 load() 刷新 -->
+            <a-switch
+              size="small"
+              :model-value="isAllMuted(record)"
+              :loading="allMuteBusyId === Number(record.id)"
+              :disabled="!allMuteSupported"
+              @change="(v) => toggleAllMute(record, v)"
+            >
+              <template #checked>已开启</template>
+              <template #unchecked>未开启</template>
+            </a-switch>
           </template>
         </a-table-column>
 
@@ -196,6 +232,17 @@
           </a-col>
         </a-row>
 
+        <a-form-item field="all_muted" label="全体禁言">
+          <a-switch :model-value="!!Number(form.all_muted)" @change="onAllMuteChange">
+            <template #checked>已开启</template>
+            <template #unchecked>未开启</template>
+          </a-switch>
+          <div class="form-tip">
+            开启后仅群管理员可发言, 普通成员发送消息会被服务端拒绝。
+            <template v-if="!allMuteSupported">(服务端暂未返回 all_muted 字段, 现在保存不会生效)</template>
+          </div>
+        </a-form-item>
+
         <div class="form-tip">停用后 App 端社交页不再展示该群组, 但已有群消息保留。</div>
       </a-form>
     </a-modal>
@@ -209,12 +256,15 @@ import { api, apiForm, pickList } from '../api'
 import { isMobile, modalWidth, tableScroll } from '../composables/useResponsive'
 
 // 表格横向滚动: 桌面按列宽总和 1210, 手机端至少 720
-const scrollX = tableScroll(1210)
+const scrollX = tableScroll(1320)
 
 const list = ref([])
 const loading = ref(false)
 const saving = ref(false)
 const showGroup = ref(false)
+// 行内开关正在保存的群 id (0 = 空闲); 服务端是否已返回 all_muted 字段
+const allMuteBusyId = ref(0)
+const allMuteSupported = ref(true)
 
 // 群组头像上传: 选中文件后本地预览, 保存时作为 icon_file 一起提交
 const iconInputRef = ref(null)
@@ -230,6 +280,7 @@ const form = reactive({
   notice: '',
   sort_order: 0,
   is_active: 1,
+  all_muted: 0,
 })
 
 function initial(record) {
@@ -241,6 +292,10 @@ async function load() {
   try {
     const r = await api('admin_groups')
     list.value = pickList(r)
+    // 服务端未部署 all_muted 时该字段整体缺失: 按「未开启」显示 + 禁用开关, 不做静默失败
+    if (list.value.length) {
+      allMuteSupported.value = list.value.some((g) => Object.prototype.hasOwnProperty.call(g, 'all_muted'))
+    }
   } finally {
     loading.value = false
   }
@@ -257,6 +312,8 @@ function openGroup(record) {
       notice: record.notice || '',
       sort_order: Number(record.sort_order) || 0,
       is_active: Number(record.is_active) ? 1 : 0,
+      // 字段缺失 (服务端未部署) 时按未开启显示
+      all_muted: Number(record.all_muted ?? 0) === 1 ? 1 : 0,
     })
     iconFile.value = null
     iconPreview.value = record.icon || ''
@@ -269,6 +326,7 @@ function openGroup(record) {
       notice: '',
       sort_order: 0,
       is_active: 1,
+      all_muted: 0,
     })
     iconFile.value = null
     iconPreview.value = ''
@@ -324,6 +382,7 @@ async function save() {
       notice: form.notice || '',
       sort_order: Number(form.sort_order) || 0,
       is_active: Number(form.is_active) ? 1 : 0,
+      all_muted: Number(form.all_muted) ? 1 : 0,
     }
     let r
     if (iconFile.value) {
@@ -339,10 +398,13 @@ async function save() {
       if (r.code !== 401) Message.error('保存失败: ' + (r.msg || '未知错误'))
       return
     }
+    const wantMuted = Number(form.all_muted) ? 1 : 0
+    const savedId = Number((r.data && r.data.id) || form.id) || 0
     showGroup.value = false
     iconFile.value = null
     Message.success(form.id ? '保存成功' : '新建成功')
-    load()
+    // 服务端未支持 all_muted 时会静默忽略, 保存后核对一次并提示
+    await verifyAllMuted(savedId, wantMuted)
   } finally {
     saving.value = false
     iconUploading.value = false
@@ -367,6 +429,69 @@ async function toggleActive(record) {
   }
   Message.success(next ? '已启用' : '已停用')
   load()
+}
+
+/** 行数据是否已开启全体禁言 (字段缺失按未开启) */
+function isAllMuted(record) {
+  return Number(record && record.all_muted) === 1
+}
+
+function onAllMuteChange(v) {
+  form.all_muted = v ? 1 : 0
+}
+
+/**
+ * 列表行内直接切换「全体禁言」:
+ * 立即调 admin_group_save (带 id 与 all_muted), 成功/失败都提示, 失败回滚开关。
+ * 注意: 必须带上整行字段 —— 服务端保存时 description/icon/sort_order/is_active
+ * 是按参数写入的, 只传 id + all_muted 会把简介/头像/排序/状态冲掉;
+ * 而 name / notice 服务端有「未提交则沿用原值」保护。此处沿用 toggleActive 的整行提交方式。
+ */
+async function toggleAllMute(record, v) {
+  const id = Number(record && record.id) || 0
+  if (!id) return
+  const next = v ? 1 : 0
+  const prev = isAllMuted(record) ? 1 : 0
+  allMuteBusyId.value = id
+  try {
+    const r = await api('admin_group_save', {
+      id,
+      name: record.name,
+      icon: record.icon || '',
+      description: record.description || '',
+      notice: record.notice || '',
+      sort_order: Number(record.sort_order) || 0,
+      is_active: Number(record.is_active) ? 1 : 0,
+      all_muted: next,
+    }, 'POST')
+    if (r.code !== 0) {
+      if (r.code !== 401) Message.error('保存失败: ' + (r.msg || '未知错误'))
+      record.all_muted = prev // 回滚开关
+      return
+    }
+    const applied = await verifyAllMuted(id, next)
+    if (!applied) record.all_muted = prev // 服务端没接受该字段 -> 回滚开关
+    else Message.success(next ? '已开启全体禁言' : '已关闭全体禁言')
+  } finally {
+    allMuteBusyId.value = 0
+  }
+}
+
+/** 保存后核对 all_muted 是否真的生效 (服务端未部署该字段时会静默忽略) */
+async function verifyAllMuted(id, expected) {
+  await load()
+  if (allMuteSupported.value === false) {
+    if (expected !== 1) return true
+    Message.warning('「全体禁言」未生效: 服务端暂未返回 all_muted 字段, 请等服务端部署后重试')
+    return false
+  }
+  const rec = list.value.find((g) => Number(g.id) === Number(id))
+  if (!rec) return true
+  if ((Number(rec.all_muted ?? 0) === 1 ? 1 : 0) !== expected) {
+    Message.warning('「全体禁言」未生效: 服务端未保存该字段')
+    return false
+  }
+  return true
 }
 
 /** 删除: 二次确认, 明确提示会连同群消息一起删除 */
@@ -443,6 +568,16 @@ onMounted(load)
 }
 .group-name { font-weight: 600; }
 .form-tip { font-size: 12px; color: var(--color-text-3); line-height: 1.6; margin-top: 4px; }
+/* 服务端未支持 all_muted 时的提示条 */
+.allmute-warn {
+  margin-bottom: 12px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: var(--color-warning-light-1, #fff7e8);
+  color: rgb(var(--warning-6, 255 125 0));
+  font-size: 12px;
+  line-height: 1.6;
+}
 
 /* 图标是方形小图, 在全局 .thumb 基础上只定尺寸 */
 .thumb {
