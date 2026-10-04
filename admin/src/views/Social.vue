@@ -169,7 +169,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { Message, Modal } from '@arco-design/web-vue'
 import { api } from '../api'
-import { isMobile, tableScroll } from '../composables/useResponsive'
+import { isMobile, modalWidth, tableScroll } from '../composables/useResponsive'
 
 // 表格横向滚动: 桌面按列宽总和 1080, 手机端至少 720
 const scrollX = tableScroll(1170)
