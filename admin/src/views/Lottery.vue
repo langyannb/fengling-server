@@ -44,6 +44,10 @@
                     <span class="m-card-value">{{ Number(p.sort_order) || 0 }}</span>
                   </div>
                   <div class="m-card-row">
+                    <span class="m-card-label">权重</span>
+                    <span class="m-card-value">{{ num(p.weight) }}（0 = 不参与）</span>
+                  </div>
+                  <div class="m-card-row">
                     <span class="m-card-label">库存</span>
                     <span class="m-card-value">
                       总 {{ num(p.total) }} / 已用 {{ num(p.used) }} /
@@ -66,7 +70,7 @@
             <a-empty v-if="!prizeLoading && !prizes.length" description="暂无奖项" />
           </template>
 
-          <!-- 桌面端: 表格; 列宽合计 70+160+110+200+80+110+190+170+250 = 1340 -->
+          <!-- 桌面端: 表格; 列宽合计 70+160+110+200+80+80+110+190+170+250 = 1420 -->
           <a-table
             v-else
             :data="prizes"
@@ -91,6 +95,13 @@
               </a-table-column>
               <a-table-column title="排序" :width="80">
                 <template #cell="{ record }">{{ Number(record.sort_order) || 0 }}</template>
+              </a-table-column>
+              <a-table-column title="权重" :width="80">
+                <template #cell="{ record }">
+                  <span :style="num(record.weight) === 0 ? 'color: var(--color-text-3)' : ''">
+                    {{ num(record.weight) }}
+                  </span>
+                </template>
               </a-table-column>
               <a-table-column title="状态" :width="110">
                 <template #cell="{ record }">
@@ -243,41 +254,247 @@
 
         <!-- ==================== 三、活动设置 ==================== -->
         <a-tab-pane key="config" title="活动设置">
-          <!-- 显著说明: 0 = 不限 (服务端 >999 会报错) -->
+          <!-- ---------- 当前状态条: admin_lottery_window_preview ---------- -->
+          <a-card :bordered="true" class="win-state-card">
+            <div class="win-state">
+              <a-tag :color="windowColor" size="medium">{{ windowStateText }}</a-tag>
+              <span v-if="windowState.text" class="muted">时段: {{ windowState.text }}</span>
+              <span v-if="windowState.next_open_at" class="muted">下次开放: {{ windowState.next_open_at }}</span>
+              <span v-else-if="windowState.reason_text" class="muted">{{ windowState.reason_text }}</span>
+              <span v-if="windowState.daily_total_left !== undefined" class="muted">
+                今日剩余可发: {{ num(windowState.daily_total_left) }}
+              </span>
+              <div class="toolbar-spacer"></div>
+              <span class="muted">服务器时间: {{ windowState.server_time || '-' }}</span>
+              <a-button size="small" :loading="windowLoading" @click="loadWindowState">
+                <template #icon><icon-refresh /></template>刷新状态
+              </a-button>
+            </div>
+          </a-card>
+
           <a-alert type="info" style="margin-bottom: 12px">
-            <div><b>每日抽奖次数：0 = 不限</b>（该用户每天都能抽，只受「默认每人抽奖次数 / 用户单独设置」限制）。</div>
-            <div>填 1-999 = 每人每天最多抽这么多次，次日自动重置；超过 999 服务端会报错。</div>
+            <div><b>下拉/数字项里的 0 都表示「不限」</b>（每日次数、每周次数、冷却秒数、全站每日发放上限）。</div>
+            <div>保存会一次性提交本页全部设置；服务端校验失败时会原样显示中文错误提示。</div>
           </a-alert>
+
           <a-spin :loading="configLoading" style="width: 100%">
             <a-form :model="configForm" layout="vertical" class="config-form">
-              <a-form-item label="抽奖开关">
-                <a-switch v-model="configForm.enabled" :checked-value="1" :unchecked-value="0">
-                  <template #checked>开启</template>
-                  <template #unchecked>关闭</template>
-                </a-switch>
-              </a-form-item>
-              <a-form-item label="抽奖标题">
-                <a-input v-model="configForm.title" placeholder="例如: 抽卡密活动" allow-clear />
-              </a-form-item>
-              <a-form-item label="抽奖内容 / 说明">
-                <a-textarea
-                  v-model="configForm.content"
-                  placeholder="公众号关注后回复「抽奖」即可参与 (支持换行)"
-                  :auto-size="{ minRows: 5, maxRows: 14 }"
-                />
-              </a-form-item>
-              <a-form-item label="默认每人抽奖次数">
-                <a-input-number v-model="configForm.per_user_limit" :min="0" :precision="0" style="width: 100%" />
-                <div class="form-tip">0 = 默认每人不能抽；每个用户可以用「用户管理 → 设置抽奖次数」单独覆盖。</div>
-              </a-form-item>
-              <a-form-item label="每日抽奖次数">
-                <a-input-number v-model="configForm.daily_limit" :min="0" :max="999" :precision="0" style="width: 100%" />
-                <div class="form-tip">
-                  <b>0 = 不限</b>（每人每天都能抽）；1-999 = 每人每天最多抽这么多次，次日自动重置。
+              <!-- ========== 1. 基本 ========== -->
+              <a-card :bordered="false" class="cfg-group">
+                <a-divider orientation="left">基本</a-divider>
+                <a-form-item label="抽奖开关">
+                  <a-switch v-model="configForm.enabled" :checked-value="1" :unchecked-value="0">
+                    <template #checked>开启</template>
+                    <template #unchecked>关闭</template>
+                  </a-switch>
+                  <div class="form-tip">关闭后客户端抽奖会提示「抽奖活动已关闭」。</div>
+                </a-form-item>
+                <a-form-item label="抽奖标题">
+                  <a-input v-model="configForm.title" placeholder="例如: 免费抽卡密 (不超过 50 字)" allow-clear />
+                </a-form-item>
+                <a-form-item label="抽奖内容 / 说明">
+                  <a-textarea
+                    v-model="configForm.content"
+                    placeholder="公众号关注后回复「抽奖」即可参与 (支持换行, 不超过 2000 字)"
+                    :auto-size="{ minRows: 4, maxRows: 12 }"
+                  />
+                </a-form-item>
+                <a-form-item label="抽中弹窗文案">
+                  <a-input v-model="configForm.success_text" placeholder="留空=客户端用默认" allow-clear />
+                  <div class="form-tip">中奖弹窗顶部显示的自定义文案；留空 = 客户端用默认文案，不超过 200 字。</div>
+                </a-form-item>
+                <a-form-item label="抽完提示文案">
+                  <a-input v-model="configForm.empty_text" placeholder="奖品已抽完, 请稍后再来" allow-clear />
+                  <div class="form-tip">奖品池抽空时客户端显示的提示；默认「奖品已抽完, 请稍后再来」，不超过 200 字。</div>
+                </a-form-item>
+              </a-card>
+
+              <!-- ========== 2. 次数与重置 ========== -->
+              <a-card :bordered="false" class="cfg-group">
+                <a-divider orientation="left">次数与重置</a-divider>
+                <a-row :gutter="12">
+                  <a-col :span="isMobile ? 24 : 12">
+                    <a-form-item label="每人总次数">
+                      <a-input-number
+                        v-model="configForm.per_user_limit"
+                        :min="0"
+                        :max="9999"
+                        :precision="0"
+                        style="width: 100%"
+                      />
+                      <div class="form-tip">0 = 默认每人不能抽；单个用户可在「用户管理 → 设置抽奖次数」里覆盖。</div>
+                    </a-form-item>
+                  </a-col>
+                  <a-col :span="isMobile ? 24 : 12">
+                    <a-form-item label="每人每日次数">
+                      <a-input-number
+                        v-model="configForm.daily_limit"
+                        :min="0"
+                        :max="999"
+                        :precision="0"
+                        style="width: 100%"
+                      />
+                      <div class="form-tip"><b>0 = 不限</b>；1-999 = 每人每天最多抽这么多次。</div>
+                    </a-form-item>
+                  </a-col>
+                  <a-col :span="isMobile ? 24 : 12">
+                    <a-form-item label="每人每周次数">
+                      <a-input-number
+                        v-model="configForm.week_limit"
+                        :min="0"
+                        :max="999"
+                        :precision="0"
+                        style="width: 100%"
+                      />
+                      <div class="form-tip"><b>0 = 不限</b>；1-999 = 每人每周（周一起算）最多抽这么多次。</div>
+                    </a-form-item>
+                  </a-col>
+                  <a-col :span="isMobile ? 24 : 12">
+                    <a-form-item label="每日重置时间">
+                      <a-time-picker
+                        v-model="configForm.daily_reset_time"
+                        format="HH:mm"
+                        :allow-clear="false"
+                        placeholder="00:00"
+                        style="width: 100%"
+                      />
+                      <div class="form-tip">格式 HH:mm，默认 00:00；决定「今日 / 本周」的起算边界。</div>
+                    </a-form-item>
+                  </a-col>
+                  <a-col :span="isMobile ? 24 : 12">
+                    <a-form-item label="两次抽奖冷却秒数">
+                      <a-input-number
+                        v-model="configForm.cooldown_seconds"
+                        :min="0"
+                        :max="86400"
+                        :precision="0"
+                        style="width: 100%"
+                      />
+                      <div class="form-tip"><b>0 = 不限</b>；两次抽奖的最小间隔，最大 86400 秒。</div>
+                    </a-form-item>
+                  </a-col>
+                </a-row>
+              </a-card>
+
+              <!-- ========== 3. 开放时段 ========== -->
+              <a-card :bordered="false" class="cfg-group">
+                <a-divider orientation="left">开放时段</a-divider>
+                <a-form-item label="启用自定义开放时段">
+                  <a-switch v-model="configForm.windows_enabled" :checked-value="1" :unchecked-value="0">
+                    <template #checked>启用</template>
+                    <template #unchecked>关闭</template>
+                  </a-switch>
+                  <div class="form-tip">关闭或留空 = 全天都能抽，例：每天 19:30-20:00</div>
+                </a-form-item>
+                <div class="win-list">
+                  <div class="win-head">
+                    <span class="muted">最多 10 条；不选星期 = 每天；结束时间不晚于开始时间 = 跨天到次日；多条取并集。</span>
+                    <a-button size="small" :disabled="configForm.windows.length >= 10" @click="addWindow">
+                      <template #icon><icon-plus /></template>添加时段
+                    </a-button>
+                  </div>
+                  <a-empty v-if="!configForm.windows.length" description="还没有时段, 点「添加时段」" />
+                  <div v-for="(w, i) in configForm.windows" :key="i" class="win-row">
+                    <a-time-picker
+                      v-model="w.start"
+                      format="HH:mm"
+                      :allow-clear="false"
+                      placeholder="开始 19:30"
+                      class="win-time"
+                    />
+                    <span class="win-sep muted">至</span>
+                    <a-time-picker
+                      v-model="w.end"
+                      format="HH:mm"
+                      :allow-clear="false"
+                      placeholder="结束 20:00"
+                      class="win-time"
+                    />
+                    <a-checkbox-group v-model="w.days" :options="dayOptions" class="win-days" />
+                    <a-button type="text" status="danger" size="small" @click="removeWindow(i)">删除</a-button>
+                  </div>
+                  <div v-if="configForm.windows.length" class="form-tip">
+                    共 {{ configForm.windows.length }} / 10 条时段；不选星期表示每天都生效。
+                  </div>
                 </div>
-              </a-form-item>
+              </a-card>
+
+              <!-- ========== 4. 活动有效期 ========== -->
+              <a-card :bordered="false" class="cfg-group">
+                <a-divider orientation="left">活动有效期</a-divider>
+                <a-row :gutter="12">
+                  <a-col :span="isMobile ? 24 : 12">
+                    <a-form-item label="开始日期">
+                      <a-date-picker
+                        v-model="configForm.start_date"
+                        format="YYYY-MM-DD"
+                        value-format="YYYY-MM-DD"
+                        placeholder="留空 = 不限"
+                        allow-clear
+                        style="width: 100%"
+                      />
+                    </a-form-item>
+                  </a-col>
+                  <a-col :span="isMobile ? 24 : 12">
+                    <a-form-item label="结束日期">
+                      <a-date-picker
+                        v-model="configForm.end_date"
+                        format="YYYY-MM-DD"
+                        value-format="YYYY-MM-DD"
+                        placeholder="留空 = 不限 (含当天 23:59:59)"
+                        allow-clear
+                        style="width: 100%"
+                      />
+                    </a-form-item>
+                  </a-col>
+                </a-row>
+                <div class="form-tip">两个都留空 = 不限日期；结束日期不能早于开始日期。</div>
+              </a-card>
+
+              <!-- ========== 5. 发放与展示 ========== -->
+              <a-card :bordered="false" class="cfg-group">
+                <a-divider orientation="left">发放与展示</a-divider>
+                <a-form-item label="全站每日发放上限">
+                  <a-input-number
+                    v-model="configForm.daily_total_limit"
+                    :min="0"
+                    :max="999999"
+                    :precision="0"
+                    style="width: 100%"
+                  />
+                  <div class="form-tip"><b>0 = 不限</b>；今天全站最多发出这么多张卡密，最大 999999。</div>
+                </a-form-item>
+                <a-row :gutter="12">
+                  <a-col :span="isMobile ? 24 : 8">
+                    <a-form-item label="客户端显示奖项列表">
+                      <a-switch v-model="configForm.show_prizes" :checked-value="1" :unchecked-value="0">
+                        <template #checked>显示</template>
+                        <template #unchecked>隐藏</template>
+                      </a-switch>
+                    </a-form-item>
+                  </a-col>
+                  <a-col :span="isMobile ? 24 : 8">
+                    <a-form-item label="显示剩余数量">
+                      <a-switch v-model="configForm.show_stock" :checked-value="1" :unchecked-value="0">
+                        <template #checked>显示</template>
+                        <template #unchecked>隐藏</template>
+                      </a-switch>
+                    </a-form-item>
+                  </a-col>
+                  <a-col :span="isMobile ? 24 : 8">
+                    <a-form-item label="中奖发系统通知">
+                      <a-switch v-model="configForm.notify_winner" :checked-value="1" :unchecked-value="0">
+                        <template #checked>发送</template>
+                        <template #unchecked>不发送</template>
+                      </a-switch>
+                      <div class="form-tip">关闭后中奖不再往消息中心插入含卡密的通知。</div>
+                    </a-form-item>
+                  </a-col>
+                </a-row>
+              </a-card>
+
               <a-form-item>
-                <a-button type="primary" :loading="configSaving" @click="saveConfig">保存</a-button>
+                <a-button type="primary" :loading="configSaving" @click="saveConfig">保存全部设置</a-button>
                 <a-button :loading="configLoading" style="margin-left: 8px" @click="loadConfig">刷新</a-button>
               </a-form-item>
             </a-form>
@@ -364,12 +581,17 @@
           />
         </a-form-item>
         <a-row :gutter="12">
-          <a-col :span="isMobile ? 24 : 12">
+          <a-col :span="isMobile ? 24 : 8">
             <a-form-item label="排序">
               <a-input-number v-model="prizeForm.sort_order" :min="0" :precision="0" style="width: 100%" />
             </a-form-item>
           </a-col>
-          <a-col :span="isMobile ? 24 : 12">
+          <a-col :span="isMobile ? 24 : 8">
+            <a-form-item label="权重">
+              <a-input-number v-model="prizeForm.weight" :min="0" :max="1000" :precision="0" style="width: 100%" />
+            </a-form-item>
+          </a-col>
+          <a-col :span="isMobile ? 24 : 8">
             <a-form-item label="状态">
               <a-switch v-model="prizeForm.is_active" :checked-value="1" :unchecked-value="0">
                 <template #checked>启用</template>
@@ -379,6 +601,7 @@
           </a-col>
         </a-row>
         <div class="form-tip">排序越小越靠前；停用或库存为 0 的奖项不会出现在客户端抽奖列表里。</div>
+        <div class="form-tip">权重越大越容易被抽到；0 = 不参与（默认 100，最大 1000）。</div>
       </a-form>
     </a-modal>
 
@@ -641,7 +864,7 @@ async function loadPrizes() {
 // ============ 新增 / 编辑奖项 ============
 const showPrize = ref(false)
 const prizeSaving = ref(false)
-const emptyPrizeForm = () => ({ id: 0, name: '', card_type: '天卡', description: '', sort_order: 0, is_active: 1 })
+const emptyPrizeForm = () => ({ id: 0, name: '', card_type: '天卡', description: '', sort_order: 0, weight: 100, is_active: 1 })
 const prizeForm = ref(emptyPrizeForm())
 
 function openPrize(record) {
@@ -653,6 +876,9 @@ function openPrize(record) {
       card_type: record.card_type || '',
       description: record.description || '',
       sort_order: num(record.sort_order),
+      weight: (record.weight === undefined || record.weight === null || record.weight === '')
+        ? 100
+        : num(record.weight),
       is_active: Number(record.is_active) ? 1 : 0,
     })
   }
@@ -672,6 +898,7 @@ async function savePrize() {
       card_type: String(f.card_type).trim(),
       description: f.description || '',
       sort_order: num(f.sort_order),
+      weight: num(f.weight),
       is_active: Number(f.is_active) ? 1 : 0,
     }, 'POST')
     if (r.code !== 0) {
@@ -695,6 +922,9 @@ async function togglePrize(record, v) {
     card_type: record.card_type,
     description: record.description || '',
     sort_order: num(record.sort_order),
+    weight: (record.weight === undefined || record.weight === null || record.weight === '')
+      ? 100
+      : num(record.weight),
     is_active: next,
   }, 'POST')
   if (r.code !== 0) {
@@ -941,7 +1171,100 @@ function onDrawPageSizeChange(pageSize) {
 // ============ 活动设置 ============
 const configLoading = ref(false)
 const configSaving = ref(false)
-const configForm = ref({ enabled: 0, title: '', content: '', per_user_limit: 1, daily_limit: 0 })
+
+/** 星期多选: 1=周一 ... 7=周日 (不选 = 每天) */
+const dayOptions = [
+  { label: '周一', value: 1 },
+  { label: '周二', value: 2 },
+  { label: '周三', value: 3 },
+  { label: '周四', value: 4 },
+  { label: '周五', value: 5 },
+  { label: '周六', value: 6 },
+  { label: '周日', value: 7 },
+]
+
+/** 时间统一成 HH:mm; 非法值回 fallback */
+function normHm(v, fallback) {
+  const s = String(v === undefined || v === null ? '' : v).trim()
+  const m = s.match(/^(\d{1,2}):(\d{1,2})/)
+  if (!m) return fallback === undefined ? '' : fallback
+  const h = Math.min(23, Math.max(0, parseInt(m[1], 10)))
+  const mi = Math.min(59, Math.max(0, parseInt(m[2], 10)))
+  return String(h).padStart(2, '0') + ':' + String(mi).padStart(2, '0')
+}
+
+/** 日期统一成 YYYY-MM-DD; 非法/空 → '' */
+function normDate(v) {
+  const s = String(v === undefined || v === null ? '' : v).trim()
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/)
+  return m ? m[1] + '-' + m[2] + '-' + m[3] : ''
+}
+
+const emptyWindow = () => ({ start: '', end: '', days: [] })
+
+const emptyConfigForm = () => ({
+  enabled: 0,
+  title: '',
+  content: '',
+  success_text: '',
+  empty_text: '奖品已抽完, 请稍后再来',
+  per_user_limit: 1,
+  daily_limit: 0,
+  week_limit: 0,
+  daily_reset_time: '00:00',
+  cooldown_seconds: 0,
+  windows_enabled: 0,
+  windows: [],
+  start_date: '',
+  end_date: '',
+  daily_total_limit: 0,
+  show_prizes: 1,
+  show_stock: 1,
+  notify_winner: 1,
+})
+const configForm = ref(emptyConfigForm())
+
+/** 服务端返回的配置 → 表单 (缺字段/非法值一律回默认, 避免把 undefined 塞给组件) */
+function pickConfig(d) {
+  const f = emptyConfigForm()
+  const s = d || {}
+  f.enabled = Number(s.enabled) ? 1 : 0
+  f.title = s.title || ''
+  f.content = s.content || ''
+  f.success_text = s.success_text || ''
+  f.empty_text = s.empty_text || '奖品已抽完, 请稍后再来'
+  f.per_user_limit = num(s.per_user_limit)
+  f.daily_limit = num(s.daily_limit)
+  f.week_limit = num(s.week_limit)
+  f.daily_reset_time = normHm(s.daily_reset_time, '00:00')
+  f.cooldown_seconds = num(s.cooldown_seconds)
+  f.windows_enabled = Number(s.windows_enabled) ? 1 : 0
+  f.windows = Array.isArray(s.windows)
+    ? s.windows.slice(0, 10).map((w) => ({
+        start: normHm(w && w.start, ''),
+        end: normHm(w && w.end, ''),
+        days: Array.isArray(w && w.days)
+          ? w.days.map((x) => Number(x)).filter((x) => x >= 1 && x <= 7)
+          : [],
+      }))
+    : []
+  f.start_date = normDate(s.start_date)
+  f.end_date = normDate(s.end_date)
+  f.daily_total_limit = num(s.daily_total_limit)
+  f.show_prizes = s.show_prizes === undefined ? 1 : (Number(s.show_prizes) ? 1 : 0)
+  f.show_stock = s.show_stock === undefined ? 1 : (Number(s.show_stock) ? 1 : 0)
+  f.notify_winner = s.notify_winner === undefined ? 1 : (Number(s.notify_winner) ? 1 : 0)
+  return f
+}
+
+function addWindow() {
+  if (configForm.value.windows.length >= 10) { Message.warning('抽奖时段最多 10 条'); return }
+  configForm.value.windows.push(emptyWindow())
+}
+
+function removeWindow(index) {
+  configForm.value.windows.splice(index, 1)
+}
 
 async function loadConfig() {
   configLoading.value = true
@@ -955,35 +1278,98 @@ async function loadConfig() {
     if (r.code !== 401) Message.error(r.msg || '活动配置加载失败')
     return
   }
-  const d = r.data || {}
-  configForm.value = {
-    enabled: Number(d.enabled) ? 1 : 0,
-    title: d.title || '',
-    content: d.content || '',
-    per_user_limit: num(d.per_user_limit),
-    daily_limit: num(d.daily_limit),
-  }
+  configForm.value = pickConfig(r.data)
 }
 
+/** 一次性提交全部字段; 失败时把服务端中文错误原文原样弹出来 */
 async function saveConfig() {
   const f = configForm.value
+  // 不论开关是否打开都校验: 关闭时也会把已配好的时段原样存回去, 避免开关一关就丢配置
+  for (let i = 0; i < f.windows.length; i++) {
+    const w = f.windows[i]
+    if (!w.start || !w.end) { Message.warning('第 ' + (i + 1) + ' 个时段请把开始/结束时间都选上'); return }
+    if (w.start === w.end) { Message.warning('第 ' + (i + 1) + ' 个时段的开始和结束时间不能相同'); return }
+  }
+  if (f.start_date && f.end_date && f.end_date < f.start_date) {
+    Message.warning('结束日期不能早于开始日期')
+    return
+  }
+  const payload = {
+    enabled: Number(f.enabled) ? 1 : 0,
+    title: f.title || '',
+    content: f.content || '',
+    success_text: f.success_text || '',
+    empty_text: f.empty_text || '',
+    per_user_limit: num(f.per_user_limit),
+    daily_limit: num(f.daily_limit),
+    week_limit: num(f.week_limit),
+    daily_reset_time: normHm(f.daily_reset_time, '00:00'),
+    cooldown_seconds: num(f.cooldown_seconds),
+    windows_enabled: Number(f.windows_enabled) ? 1 : 0,
+    windows: f.windows.map((w) => ({
+      start: normHm(w.start, '00:00'),
+      end: normHm(w.end, '00:00'),
+      days: Array.isArray(w.days) ? w.days.map((x) => Number(x)).filter((x) => x >= 1 && x <= 7) : [],
+    })),
+    start_date: normDate(f.start_date),
+    end_date: normDate(f.end_date),
+    daily_total_limit: num(f.daily_total_limit),
+    show_prizes: Number(f.show_prizes) ? 1 : 0,
+    show_stock: Number(f.show_stock) ? 1 : 0,
+    notify_winner: Number(f.notify_winner) ? 1 : 0,
+  }
   configSaving.value = true
   try {
-    const r = await api('admin_lottery_config_set', {
-      enabled: Number(f.enabled) ? 1 : 0,
-      title: f.title || '',
-      content: f.content || '',
-      per_user_limit: num(f.per_user_limit),
-      daily_limit: num(f.daily_limit),
-    }, 'POST')
+    const r = await api('admin_lottery_config_set', payload, 'POST')
     if (r.code !== 0) {
       if (r.code !== 401) Message.error(r.msg || '保存失败')
       return
     }
+    // 回显服务端归一化后的配置
+    if (r.data) configForm.value = pickConfig(r.data)
     Message.success('已保存')
+    loadWindowState()
   } finally {
     configSaving.value = false
   }
+}
+
+// ============ 当前状态 (开放时段预览) ============
+const windowLoading = ref(false)
+const windowState = ref({})
+
+/** 服务端 reason → 中文状态; 接口未部署时显示「状态未知」 */
+const windowStateText = computed(() => {
+  const r = String(windowState.value.reason || '')
+  if (r === 'open') return '开放中'
+  if (r === 'outside_window') return '未在开放时间'
+  if (r === 'before_start') return '活动还没开始'
+  if (r === 'after_end') return '活动已经结束'
+  if (r === 'disabled') return '活动已关闭'
+  return '状态未知'
+})
+
+const windowColor = computed(() => {
+  const r = String(windowState.value.reason || '')
+  if (r === 'open') return 'green'
+  if (r === 'disabled') return 'gray'
+  return 'orange'
+})
+
+async function loadWindowState() {
+  windowLoading.value = true
+  let r
+  try {
+    r = await api('admin_lottery_window_preview', {}, 'POST')
+  } finally {
+    windowLoading.value = false
+  }
+  if (r.code !== 0) {
+    windowState.value = {}
+    if (r.code !== 401) Message.warning(r.msg || '抽奖状态获取失败')
+    return
+  }
+  windowState.value = r.data || {}
 }
 
 // ============ 重置与清空 ============
@@ -1058,6 +1444,7 @@ onMounted(() => {
   loadPrizes()
   loadDraws()
   loadConfig()
+  loadWindowState()
 })
 </script>
 
@@ -1068,10 +1455,23 @@ onMounted(() => {
 .stock-zero { color: rgb(var(--danger-6)); font-weight: 600; }
 .code-cell { display: flex; align-items: center; gap: 6px; }
 .code-cell .mono { flex: 1 1 auto; min-width: 0; }
-.config-form { max-width: 640px; }
+.config-form { max-width: 900px; }
 .code-summary { margin-bottom: 10px; }
 .m-pager { justify-content: flex-end; margin-top: 12px; }
 .form-tip { font-size: 12px; color: var(--color-text-3); line-height: 1.6; margin-top: 4px; }
+
+/* ---- 活动设置: 当前状态条 / 分组卡片 / 开放时段 ---- */
+.win-state-card { margin-bottom: 12px; }
+.win-state { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.cfg-group { margin-bottom: 12px; background: var(--color-fill-1); }
+.cfg-group :deep(.arco-divider) { margin: 0 0 14px; }
+.cfg-group :deep(.arco-divider-text) { font-weight: 600; }
+.win-list { margin-bottom: 6px; }
+.win-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
+.win-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 8px; }
+.win-time { width: 128px; }
+.win-sep { font-size: 12px; }
+.win-days { display: flex; flex-wrap: wrap; gap: 10px; }
 
 .reset-card { margin-top: 16px; }
 .reset-alert { margin-bottom: 14px; }
