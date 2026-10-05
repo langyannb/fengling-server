@@ -1,0 +1,45 @@
+# 风铃分享库 Go 网关 (goapi) —— systemd 单元
+#
+# 安装: deploy/install.sh 会把它装到 /etc/systemd/system/fengling-goapi.service
+# 日志: journalctl -u fengling-goapi -f   (程序输出 JSON 结构化日志到 stdout)
+[Unit]
+Description=风铃分享库 Go 网关 (goapi)
+Documentation=https://github.com/langyannb/fengling-server
+After=network-online.target mysql.service
+Wants=network-online.target
+# 刻意不用 Requires=mysql.service: MySQL 短暂重启不应该把网关一起停掉,
+# 网关在 MySQL 不可用时只是报错(与 PHP 行为一致), 不会崩溃退出。
+
+[Service]
+Type=simple
+User=www
+Group=www
+WorkingDirectory=/opt/fengling
+ExecStart=/opt/fengling/goapi
+EnvironmentFile=/etc/fengling/goapi.env
+Restart=always
+RestartSec=2
+
+# ---- 加固 ----
+NoNewPrivileges=yes
+# 必须为 no: 需要访问 /tmp/php-cgi-85.sock 与 /tmp/mysql.sock
+PrivateTmp=no
+PrivateDevices=yes
+ProtectSystem=full
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+# 只允许写自己的工作目录(默认不需要写任何东西, 留给日志/临时文件)
+ReadWritePaths=/opt/fengling
+LimitNOFILE=65535
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=goapi
+
+[Install]
+WantedBy=multi-user.target

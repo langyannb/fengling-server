@@ -1,0 +1,71 @@
+name: goapi 构建与测试
+
+# 只在本目录或本工作流有改动时触发; 不碰 PHP 主流程, 也不做任何自动部署。
+on:
+  push:
+    branches: ['**']
+    paths:
+      - 'goapi/**'
+      - '**/goapi-build.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: goapi-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: vet / test / 交叉编译
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: goapi
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@v4
+
+      - name: 配置 Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+          cache-dependency-path: goapi/go.sum
+
+      - name: gofmt 检查
+        run: |
+          out="$(gofmt -l .)"
+          if [ -n "$out" ]; then
+            echo "以下文件未格式化(请本地跑 gofmt -w):"
+            echo "$out"
+            exit 1
+          fi
+          echo "gofmt 干净"
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        run: go test ./...
+
+      - name: 交叉编译 linux/amd64
+        env:
+          CGO_ENABLED: '0'
+          GOOS: linux
+          GOARCH: amd64
+        run: |
+          go build -trimpath \
+            -ldflags "-s -w -X main.buildVersion=$GITHUB_SHA -X main.buildTime=$(date -u +%FT%TZ)" \
+            -o goapi-linux-amd64 .
+
+      - name: 校验产物
+        run: file goapi-linux-amd64 && ls -lh goapi-linux-amd64
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: goapi-linux-amd64
+          path: goapi/goapi-linux-amd64
+          if-no-files-found: error
