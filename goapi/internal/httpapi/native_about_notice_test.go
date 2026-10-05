@@ -71,18 +71,18 @@ func TestNoticeGetDefaults(t *testing.T) {
 	}
 }
 
-// TestAboutNoticeWritersStayPassthrough 写入侧不在本单范围，必须继续透传。
-func TestAboutNoticeWritersStayPassthrough(t *testing.T) {
+// TestAboutNoticeReadsRegistered 读取侧仍必须注册。
+//
+// 阶段 5A 本测试名曾是 TestAboutNoticeWritersStayPassthrough 并断言写入侧
+// about_config_set / notice_set **不**接管；阶段 5B-2 明确把这两个写入 action 划入
+// 本阶段 scope，故这里只保留「读取侧仍注册」的守卫（写入侧由
+// native_admin_media_test.go 覆盖）。
+func TestAboutNoticeReadsRegistered(t *testing.T) {
 	src, err := os.ReadFile("router.go")
 	if err != nil {
 		t.Fatal(err)
 	}
 	code := string(src)
-	for _, a := range []string{"about_config_set", "notice_set"} {
-		if strings.Contains(code, `case "`+a+`":`) {
-			t.Fatalf("%s 不该在本单原生接管（只搬读取）", a)
-		}
-	}
 	for _, a := range []string{"about_config_get", "notice_get"} {
 		if !strings.Contains(code, `case "`+a+`":`) {
 			t.Fatalf("%s 未注册", a)

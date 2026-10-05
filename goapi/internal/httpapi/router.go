@@ -262,6 +262,44 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "notice_get":
 		setCORS(w.Header())
 		rt.handleNoticeGet(w, r)
+
+	// ---------- 阶段 5B-2：后台视频/举报/UC/发版（12 个） ----------
+	case "about_config_set":
+		setCORS(w.Header())
+		rt.handleAboutConfigSet(w, r)
+	case "notice_set":
+		setCORS(w.Header())
+		rt.handleNoticeSet(w, r)
+	case "admin_video_config_get":
+		setCORS(w.Header())
+		rt.handleAdminVideoConfigGet(w, r)
+	case "admin_video_config_set":
+		setCORS(w.Header())
+		rt.handleAdminVideoConfigSet(w, r)
+	case "admin_video_clean":
+		setCORS(w.Header())
+		rt.handleAdminVideoClean(w, r)
+	case "crash_reports":
+		setCORS(w.Header())
+		rt.handleCrashReports(w, r)
+	case "harm_reports":
+		setCORS(w.Header())
+		rt.handleHarmReports(w, r)
+	case "harm_report_status":
+		setCORS(w.Header())
+		rt.handleHarmReportStatus(w, r)
+	case "harm_report_delete":
+		setCORS(w.Header())
+		rt.handleHarmReportDelete(w, r)
+	case "uc_status":
+		setCORS(w.Header())
+		rt.handleUCStatus(w, r)
+	case "uc_logout":
+		setCORS(w.Header())
+		rt.handleUCLogout(w, r)
+	case "version_update":
+		setCORS(w.Header())
+		rt.handleVersionUpdate(w, r)
 	default:
 		// 透传路径**不预设任何头**：CORS 由 PHP 自己发，避免重复。
 		rt.fcgi.Serve(w, r)
