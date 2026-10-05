@@ -180,6 +180,37 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "admin_user_unmute":
 		setCORS(w.Header())
 		rt.handleAdminUserUnmute(w, r)
+	// 阶段 4：私聊 + 通知（其余 action 继续走 default 的 FastCGI 透传）
+	case "pm_conversations":
+		setCORS(w.Header())
+		rt.handlePmConversations(w, r)
+	case "pm_messages":
+		setCORS(w.Header())
+		rt.handlePmMessages(w, r)
+	case "pm_send":
+		setCORS(w.Header())
+		rt.handlePmSend(w, r)
+	case "pm_read":
+		setCORS(w.Header())
+		rt.handlePmRead(w, r)
+	case "pm_recall":
+		setCORS(w.Header())
+		rt.handlePmRecall(w, r)
+	case "notifications":
+		setCORS(w.Header())
+		rt.handleNotifications(w, r)
+	case "notification_read":
+		setCORS(w.Header())
+		rt.handleNotificationRead(w, r)
+	case "notification_delete":
+		setCORS(w.Header())
+		rt.handleNotificationDelete(w, r)
+	case "crash_report":
+		setCORS(w.Header())
+		rt.handleCrashReport(w, r)
+	case "harm_report":
+		setCORS(w.Header())
+		rt.handleHarmReport(w, r)
 	default:
 		// 透传路径**不预设任何头**：CORS 由 PHP 自己发，避免重复。
 		rt.fcgi.Serve(w, r)
