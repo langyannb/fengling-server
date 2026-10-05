@@ -74,6 +74,75 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "health":
 		setCORS(w.Header())
 		rt.handleHealth(w, r)
+
+	// ---------- 阶段 5B-1：后台社群/消息/用户管理（22 个，见 native_admin_social.go） ----------
+	case "admin_groups":
+		setCORS(w.Header())
+		rt.handleAdminGroups(w, r)
+	case "admin_group_save":
+		setCORS(w.Header())
+		rt.handleAdminGroupSave(w, r)
+	case "admin_group_delete":
+		setCORS(w.Header())
+		rt.handleAdminGroupDelete(w, r)
+	case "admin_group_members":
+		setCORS(w.Header())
+		rt.handleAdminGroupMembers(w, r)
+	case "admin_group_member_remove":
+		setCORS(w.Header())
+		rt.handleAdminGroupMemberRemove(w, r)
+	case "admin_social_messages":
+		setCORS(w.Header())
+		rt.handleAdminSocialMessages(w, r)
+	case "admin_social_message_delete":
+		setCORS(w.Header())
+		rt.handleAdminSocialMessageDelete(w, r)
+	case "admin_social_message_clear":
+		setCORS(w.Header())
+		rt.handleAdminSocialMessageClear(w, r)
+	case "admin_pm_conversations":
+		setCORS(w.Header())
+		rt.handleAdminPmConversations(w, r)
+	case "admin_pm_messages":
+		setCORS(w.Header())
+		rt.handleAdminPmMessages(w, r)
+	case "admin_pm_message_delete":
+		setCORS(w.Header())
+		rt.handleAdminPmMessageDelete(w, r)
+	case "admin_pm_clear":
+		setCORS(w.Header())
+		rt.handleAdminPmClear(w, r)
+	case "admin_notification_list":
+		setCORS(w.Header())
+		rt.handleAdminNotificationList(w, r)
+	case "admin_notification_delete":
+		setCORS(w.Header())
+		rt.handleAdminNotificationDelete(w, r)
+	case "admin_notify_send":
+		setCORS(w.Header())
+		rt.handleAdminNotifySend(w, r)
+	case "admin_users":
+		setCORS(w.Header())
+		rt.handleAdminUsers(w, r)
+	case "admin_user_save":
+		setCORS(w.Header())
+		rt.handleAdminUserSave(w, r)
+	case "admin_user_delete":
+		setCORS(w.Header())
+		rt.handleAdminUserDelete(w, r)
+	case "admin_user_tags_set":
+		setCORS(w.Header())
+		rt.handleAdminUserTagsSet(w, r)
+	case "admin_tags":
+		setCORS(w.Header())
+		rt.handleAdminTags(w, r)
+	case "admin_tag_preset_save":
+		setCORS(w.Header())
+		rt.handleAdminTagPresetSave(w, r)
+	case "admin_tag_preset_delete":
+		setCORS(w.Header())
+		rt.handleAdminTagPresetDelete(w, r)
+
 	case "version":
 		setCORS(w.Header())
 		rt.handleVersion(w, r)
