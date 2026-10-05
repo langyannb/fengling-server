@@ -37,6 +37,14 @@ type Env struct {
 	// New() 里为空时自动补 Store；单测注入脚本化假实现，避免连真实 MySQL。
 	Accounts accountsDB
 
+	// Cols 是列探测能力（阶段 3 的 social_send 用它决定 INSERT 的列组合）。
+	// 默认取 Store（进程级缓存）；单测注入假实现以覆盖「已跑过视频迁移」的分支。
+	Cols columnProbe
+
+	// VideoCfg 读视频配置（阶段 3 的 social_send 判断「视频消息功能是否开启」）。
+	// 默认取 Store；单测注入固定配置以覆盖 enabled=0 的分支。
+	VideoCfg videoConfigSource
+
 	// Mailer 发验证码邮件（对齐 mailer.php 的 Mailer::sendCode）。
 	// 为空时一律返回 false —— 与线上 PHP「没配 SMTP_USER/SMTP_PASS」的行为一致。
 	Mailer codeMailer

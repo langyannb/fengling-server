@@ -20,6 +20,14 @@ func New(env Env) *Router {
 	if env.Accounts == nil && env.Store != nil {
 		env.Accounts = env.Store
 	}
+	// 注意不能写成 env.Cols = env.Store：*store.Store 为 nil 时接口会变成「非 nil 的
+	// 接口包着 nil 指针」，HasColumn 会被调到 nil 接收者上。
+	if env.Cols == nil && env.Store != nil {
+		env.Cols = env.Store
+	}
+	if env.VideoCfg == nil && env.Store != nil {
+		env.VideoCfg = env.Store
+	}
 	if env.Mailer == nil {
 		env.Mailer = mailer.New(mailer.Config{
 			Host:     env.Cfg.SMTPHost,
@@ -125,6 +133,53 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "logout":
 		setCORS(w.Header())
 		rt.handleLogout(w, r)
+
+	// ---------- 阶段 3：群聊（13 个 action + 2 个禁言管理） ----------
+	case "social_groups":
+		setCORS(w.Header())
+		rt.handleSocialGroups(w, r)
+	case "social_group":
+		setCORS(w.Header())
+		rt.handleSocialGroup(w, r)
+	case "social_messages":
+		setCORS(w.Header())
+		rt.handleSocialMessages(w, r)
+	case "social_read":
+		setCORS(w.Header())
+		rt.handleSocialRead(w, r)
+	case "social_send":
+		setCORS(w.Header())
+		rt.handleSocialSend(w, r)
+	case "social_recall":
+		setCORS(w.Header())
+		rt.handleSocialRecall(w, r)
+	case "social_group_notice_set":
+		setCORS(w.Header())
+		rt.handleSocialGroupNoticeSet(w, r)
+	case "social_group_allmute_set":
+		setCORS(w.Header())
+		rt.handleSocialGroupAllmuteSet(w, r)
+	case "social_group_join":
+		setCORS(w.Header())
+		rt.handleSocialGroupJoin(w, r)
+	case "social_group_leave":
+		setCORS(w.Header())
+		rt.handleSocialGroupLeave(w, r)
+	case "social_group_images":
+		setCORS(w.Header())
+		rt.handleSocialGroupImages(w, r)
+	case "social_mute_set":
+		setCORS(w.Header())
+		rt.handleSocialMuteSet(w, r)
+	case "social_group_members":
+		setCORS(w.Header())
+		rt.handleSocialGroupMembers(w, r)
+	case "admin_user_mute":
+		setCORS(w.Header())
+		rt.handleAdminUserMute(w, r)
+	case "admin_user_unmute":
+		setCORS(w.Header())
+		rt.handleAdminUserUnmute(w, r)
 	default:
 		// 透传路径**不预设任何头**：CORS 由 PHP 自己发，避免重复。
 		rt.fcgi.Serve(w, r)
