@@ -176,6 +176,8 @@ func readFrame(t *testing.T, cli *websocket.Conn, want string) map[string]any {
 		if err := json.Unmarshal(raw, &m); err != nil {
 			t.Fatalf("帧不是 JSON: %s", raw)
 		}
+		// 把真实收到的原始字节打进 -v 日志：回看时这就是「客户端确实收到了」的证据
+		t.Logf("客户端收到帧: %s", raw)
 		if m["type"] == want {
 			return m
 		}
