@@ -146,6 +146,13 @@ generate_env() {
     echo "REDIS_ADDR=$(env_quote 127.0.0.1:6379)"
     echo "REDIS_PASSWORD=$(env_quote '')"
     echo "REDIS_DB=0"
+    # 验证码邮件: 与 PHP 的 Mailer 读同一处(config.php 的 SMTP_* 常量)。
+    # config.php 没定义时留空 -> goapi 与 PHP 一样直接判定「发送失败」, 不会误发信。
+    echo "SMTP_HOST=$(env_quote "$(php_const "$PHP_CONFIG" SMTP_HOST)")"
+    echo "SMTP_PORT=$(env_quote "$(php_const "$PHP_CONFIG" SMTP_PORT)")"
+    echo "SMTP_USER=$(env_quote "$(php_const "$PHP_CONFIG" SMTP_USER)")"
+    echo "SMTP_PASS=$(env_quote "$(php_const "$PHP_CONFIG" SMTP_PASS)")"
+    echo "SMTP_FROM_NAME=$(env_quote "$(php_const "$PHP_CONFIG" SMTP_FROM_NAME)")"
     # S3 常量从 api.php 抓(阶段 1+ 会用; 现阶段只是搬过去, 不打印)
     grep -hoE "define\('S3_[A-Z_]+',[[:space:]]*'[^']*'" "$PHP_API" 2>/dev/null \
       | sed -E "s/define\('([A-Z_]+)',[[:space:]]*'([^']*)'/\\1=\"\\2\"/" || true

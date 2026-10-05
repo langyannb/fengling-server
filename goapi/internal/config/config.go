@@ -51,6 +51,16 @@ type Config struct {
 	S3SecretKey string
 	S3PublicURL string
 
+	// SMTP（验证码邮件）。对齐 mailer.php：Host/Port/FromName 有默认值，
+	// User/Pass 为空时**一律发信失败**（与线上 PHP 现状一致：config.php 里
+	// 没有定义 SMTP_USER / SMTP_PASS，所以 Mailer::send 直接 return false）。
+	// 这些键刻意不进 MissingEnv：缺了不会让 goapi 起不来，只是发信失败。
+	SMTPHost     string // smtp.qq.com
+	SMTPPort     int    // 465（SSL）
+	SMTPUser     string
+	SMTPPass     string
+	SMTPFromName string // 风铃分享库
+
 	// 上传：临时文件目录（空 = os.TempDir()，即 /tmp；systemd 单元是 PrivateTmp=no，
 	// 所以与 php-cgi 共用 /tmp 是安全的）与每人每窗口的上传次数限流。
 	UploadTmpDir     string
@@ -103,6 +113,12 @@ func Load() Config {
 		S3AccessKey: getStr("S3_ACCESS_KEY", ""),
 		S3SecretKey: getStr("S3_SECRET_KEY", ""),
 		S3PublicURL: getStr("S3_PUBLIC_URL", ""),
+
+		SMTPHost:     getStr("SMTP_HOST", "smtp.qq.com"),
+		SMTPPort:     getInt("SMTP_PORT", 465),
+		SMTPUser:     getStr("SMTP_USER", ""),
+		SMTPPass:     getStr("SMTP_PASS", ""),
+		SMTPFromName: getStr("SMTP_FROM_NAME", "风铃分享库"),
 
 		UploadTmpDir:     getStr("UPLOAD_TMP_DIR", ""),
 		UploadRateLimit:  getInt("UPLOAD_RATE_LIMIT", 30),

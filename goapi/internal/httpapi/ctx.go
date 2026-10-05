@@ -33,6 +33,14 @@ type Env struct {
 	// Cleaner 是视频清理任务（原生上传成功后复用 ticker 的同一份逻辑）。
 	Cleaner *jobs.VideoCleaner
 
+	// Accounts 是阶段 2 账号 action 的数据访问层（见 accounts.go）。
+	// New() 里为空时自动补 Store；单测注入脚本化假实现，避免连真实 MySQL。
+	Accounts accountsDB
+
+	// Mailer 发验证码邮件（对齐 mailer.php 的 Mailer::sendCode）。
+	// 为空时一律返回 false —— 与线上 PHP「没配 SMTP_USER/SMTP_PASS」的行为一致。
+	Mailer codeMailer
+
 	Version   string    // -ldflags -X main.buildVersion
 	BuildTime string    // -ldflags -X main.buildTime
 	Started   time.Time // 进程启动时刻（health 的 uptime_sec）

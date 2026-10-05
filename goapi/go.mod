@@ -7,6 +7,7 @@ require (
 	github.com/gorilla/websocket v1.5.3
 	github.com/redis/go-redis/v9 v9.22.0
 	github.com/yookoala/gofast v0.8.0
+	golang.org/x/crypto v0.31.0
 	golang.org/x/image v0.31.0
 )
 

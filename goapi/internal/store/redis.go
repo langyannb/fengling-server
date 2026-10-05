@@ -2,8 +2,11 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -37,6 +40,10 @@ const (
 
 	// ChannelEvents 是阶段 3/4 Pub/Sub 的频道名（本单只提供封装，不接管投递）。
 	ChannelEvents = "fls:events"
+
+	// 阶段 2：send_code 的「同一邮箱同一用途刚发过」标记（TTL = PHP 的 60 秒窗口）。
+	// 键里只放邮箱的 SHA-256 前 16 字节，避免把用户邮箱明文写进共用 Redis。
+	redisKeyCodeSent = "fls:rl:send_code:%s:%s"
 
 	// 视频清理的「最近一次完成时间」。
 	//
@@ -316,4 +323,47 @@ func (r *Redis) LastCleanup(ctx context.Context) (int64, bool) {
 		return 0, false
 	}
 	return n, true
+}
+
+// ---------- 阶段 2：send_code 的 60 秒窗口（同语义加速） ----------
+
+// codeSentKey 生成 `fls:rl:send_code:<purpose>:<sha256(email) 前 16 字节 hex>`。
+func codeSentKey(email, purpose string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(email)))
+	return fmt.Sprintf(redisKeyCodeSent, purpose, hex.EncodeToString(sum[:16]))
+}
+
+// MarkCodeSent 在验证码行成功入库后打一个带 TTL 的标记。
+//
+// 语义边界（很重要）：这只是**加速**，不参与判定真值。
+// 命中缓存只可能发生在「DB 里同样存在 60 秒内的行」时（标记紧跟在 INSERT 之后写），
+// 所以短路给「发送太频繁」不会改变结果；任何未命中/Redis 挂掉都回落 DB 查询。
+// Redis 不可用时直接返回（fail-open），接口绝不因此 500。
+func (r *Redis) MarkCodeSent(ctx context.Context, email, purpose string, ttl time.Duration) {
+	if !r.Enabled() {
+		return
+	}
+	if ttl <= 0 {
+		ttl = time.Minute
+	}
+	ctx, cancel := r.opCtx(ctx)
+	defer cancel()
+	if err := r.client.Set(ctx, codeSentKey(email, purpose), time.Now().Unix(), ttl).Err(); err != nil {
+		r.warn("MarkCodeSent", err)
+	}
+}
+
+// CodeSentRecently 判断是否刚发过（命中 = 等价于 DB 也会拒绝）。
+func (r *Redis) CodeSentRecently(ctx context.Context, email, purpose string) bool {
+	if !r.Enabled() {
+		return false
+	}
+	ctx, cancel := r.opCtx(ctx)
+	defer cancel()
+	n, err := r.client.Exists(ctx, codeSentKey(email, purpose)).Result()
+	if err != nil {
+		r.warn("CodeSentRecently", err)
+		return false
+	}
+	return n > 0
 }

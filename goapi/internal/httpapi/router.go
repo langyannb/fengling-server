@@ -2,6 +2,8 @@ package httpapi
 
 import (
 	"net/http"
+
+	"github.com/langyannb/fengling-server/goapi/internal/mailer"
 )
 
 // Router 是 goapi 的入口 Handler：原生 action 自己处理，其余全部透传 PHP。
@@ -11,7 +13,22 @@ type Router struct {
 }
 
 // New 组装 Router（main.go 调用一次）。
+//
+// 阶段 2 起把两份可选依赖补上默认实现：账号 action 的数据访问（*store.Store）
+// 与验证码邮件发送（mailer.Client）。单测可以直接在 Env 里注入假实现。
 func New(env Env) *Router {
+	if env.Accounts == nil && env.Store != nil {
+		env.Accounts = env.Store
+	}
+	if env.Mailer == nil {
+		env.Mailer = mailer.New(mailer.Config{
+			Host:     env.Cfg.SMTPHost,
+			Port:     env.Cfg.SMTPPort,
+			User:     env.Cfg.SMTPUser,
+			Pass:     env.Cfg.SMTPPass,
+			FromName: env.Cfg.SMTPFromName,
+		}, env.Log)
+	}
 	return &Router{env: env, fcgi: NewFCGI(env.Cfg, env.Log)}
 }
 
@@ -73,6 +90,41 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "video_config":
 		setCORS(w.Header())
 		rt.handleVideoConfig(w, r)
+
+	// ---------- 阶段 2：账号与鉴权（11 个） ----------
+	case "login":
+		setCORS(w.Header())
+		rt.handleLogin(w, r)
+	case "send_code":
+		setCORS(w.Header())
+		rt.handleSendCode(w, r)
+	case "register":
+		setCORS(w.Header())
+		rt.handleRegister(w, r)
+	case "user_me":
+		setCORS(w.Header())
+		rt.handleUserMe(w, r)
+	case "user_update":
+		setCORS(w.Header())
+		rt.handleUserUpdate(w, r)
+	case "user_password":
+		setCORS(w.Header())
+		rt.handleUserPassword(w, r)
+	case "captcha":
+		setCORS(w.Header())
+		rt.handleCaptcha(w, r)
+	case "email_verify_send":
+		setCORS(w.Header())
+		rt.handleEmailVerifySend(w, r)
+	case "email_verify":
+		setCORS(w.Header())
+		rt.handleEmailVerify(w, r)
+	case "user_profile":
+		setCORS(w.Header())
+		rt.handleUserProfile(w, r)
+	case "logout":
+		setCORS(w.Header())
+		rt.handleLogout(w, r)
 	default:
 		// 透传路径**不预设任何头**：CORS 由 PHP 自己发，避免重复。
 		rt.fcgi.Serve(w, r)
