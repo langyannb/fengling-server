@@ -161,17 +161,18 @@ func (s *Store) HasColumn(ctx context.Context, table, column string) bool {
 	}
 	found := false
 	if allowedTables[table] {
-		// 用 Query + Next 判断「有没有行」，不依赖 SHOW COLUMNS 的列数（各版本不一致）。
-		rows, err := s.db.QueryContext(ctx, "SHOW COLUMNS FROM `"+table+"` LIKE ?", column)
+		// 用 information_schema 而不是 `SHOW COLUMNS ... LIKE ?`：
+		// MySQL 的 SHOW 语句不接受占位符（会报 1064 near '?'），
+		// 一旦这里静默返回 false，实时事件里 video 系列字段就会整体消失。
+		var n int
+		err := s.db.QueryRowContext(ctx,
+			"SELECT COUNT(*) FROM information_schema.COLUMNS "+
+				"WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?",
+			table, column).Scan(&n)
 		if err != nil {
-			s.log.Warn("SHOW COLUMNS 失败, 按无此列处理", "table", table, "column", column, "err", err)
+			s.log.Warn("查询列是否存在失败, 按无此列处理", "table", table, "column", column, "err", err)
 		} else {
-			found = rows.Next()
-			if err := rows.Err(); err != nil {
-				s.log.Warn("SHOW COLUMNS 读取中断, 按无此列处理", "table", table, "column", column, "err", err)
-				found = false
-			}
-			rows.Close()
+			found = n > 0
 		}
 	}
 	s.colMu.Lock()
