@@ -18,6 +18,7 @@ GO_BASE="${GO_BASE:-http://127.0.0.1:9100}"
 PHP_BASE="${PHP_BASE:-http://127.0.0.1:9101}"
 TOKEN="${TOKEN:-}"
 STREAM_SECONDS="${STREAM_SECONDS:-2}"
+UPLOAD_CASES="${UPLOAD_CASES:-0}"   # 1 = 额外跑阶段 1 的上传类 action（写操作，需要 TOKEN）
 ONLY="${ONLY:-}"
 WORK="${WORK:-${TMPDIR:-/tmp}/goapi-diff}"
 
@@ -144,6 +145,141 @@ selected() {
   case ",$ONLY," in *",$1,"*) return 0 ;; *) return 1 ;; esac
 }
 
+# ---------- 阶段 1：上传类 action 的双跑对比（默认关闭，见 README） ----------
+#
+# 为什么默认关闭：这几个 action 是**写操作**（会往对象存储写真实对象、user_avatar 还会改
+# users.avatar），需要真实登录 token，并且会与「每人每 10 分钟 30 次上传」的限流交互。
+# 显式打开：TOKEN=<token> UPLOAD_CASES=1 ./goapi_diff.sh
+#
+# 归一化说明（上传响应里不可逐字比较的部分）：
+#   - url/key 含随机段：<YmdHis>_<8hex>、apk 的 fengling_Ymd_His；
+#   - 「需要缩放」的图片在 Go 侧可能改扩展名（见 README 阶段 1 差异说明），这类只算 ⚠️ 已知差异；
+#   - 图片类 action 的 size 允许不同（Go 不重编码 = 原始字节），APK 的 size 必须逐字相同。
+norm_upload() {
+  local f="$1" mask_size="${2:-0}"
+  if [ "$mask_size" = "1" ]; then
+    sed -E -e 's#[0-9]{14}_[0-9a-f]{8}#<RAND>#g' \
+           -e 's#fengling_[0-9]{8}_[0-9]{6}#fengling_<TS>#g' \
+           -e 's#"size":[0-9]+#"size":<N>#g' "$f"
+  else
+    sed -E -e 's#[0-9]{14}_[0-9a-f]{8}#<RAND>#g' \
+           -e 's#fengling_[0-9]{8}_[0-9]{6}#fengling_<TS>#g' "$f"
+  fi
+}
+
+# 把图片扩展名也抹掉（只用于判定「差异是否仅限于扩展名」这种已知差异）
+norm_upload_ext() {
+  norm_upload "$1" "${2:-0}" | sed -E 's#<RAND>\.(png|jpe?g|gif|webp)#<RAND>.<EXT>#g'
+}
+
+mk_upload_samples() {
+  local dir="$WORK/samples"
+  mkdir -p "$dir"
+  python3 - "$dir" <<'PY'
+import os, struct, sys, zlib
+
+d = sys.argv[1]
+
+def chunk(tag, data):
+    return struct.pack('>I', len(data)) + tag + data + struct.pack('>I', zlib.crc32(tag + data) & 0xffffffff)
+
+def write_png(path, w, h):
+    raw = bytearray()
+    for y in range(h):
+        raw.append(0)
+        for x in range(w):
+            raw += bytes([(x * 7) % 256, (y * 5) % 256, 128])
+    blob = (b'\x89PNG\r\n\x1a\n'
+            + chunk(b'IHDR', struct.pack('>IIBBBBB', w, h, 8, 2, 0, 0, 0))
+            + chunk(b'IDAT', zlib.compress(bytes(raw), 9))
+            + chunk(b'IEND', b''))
+    with open(path, 'wb') as fh:
+        fh.write(blob)
+
+# 不需要缩放（<=1600 宽）与需要缩放（>1600 宽）各一张
+write_png(os.path.join(d, 'small.png'), 64, 48)
+write_png(os.path.join(d, 'big.png'), 2400, 1200)
+# 伪 mp4：只要 ftyp box（容器判定只看前 4096 字节的文件头）
+with open(os.path.join(d, 'clip.mp4'), 'wb') as fh:
+    fh.write(struct.pack('>I', 24) + b'ftypisom' + b'\x00' * 16 + b'\x00' * 512)
+# 伪 apk：服务端只校验文件名扩展名
+with open(os.path.join(d, 'fake.apk'), 'wb') as fh:
+    fh.write(b'PK\x03\x04' + b'\x00' * 4096)
+# 非图片（走「这不是一张有效的图片」）与非白名单扩展名
+with open(os.path.join(d, 'notimage.png'), 'wb') as fh:
+    fh.write(b'this is definitely not a png\n')
+with open(os.path.join(d, 'plain.txt'), 'wb') as fh:
+    fh.write(b'hello\n')
+print('samples ->', d)
+PY
+  ls -l "$dir" | tail -n +2 | sed 's/^/     /'
+}
+
+# 上传双跑：状态码必须一致；响应体归一化后比对（随机 key / 时间戳 / 图片 size）。
+upload_case() {
+  local action="$1" file="$2" extra="$3" mask_size="${4:-0}"
+  say ""
+  say "=== ${action} ($(basename "$file")${extra:+, $extra}) ==="
+
+  local args=()
+  [ -n "$extra" ] && args=(-F "$extra")
+  local gc pc
+  gc="$(curl -sS --max-time 120 -D "$WORK/go.u.hdr" -o "$WORK/go.u.body" -w '%{http_code}' \
+        -H "Authorization: Bearer $TOKEN" -F "file=@${file}" ${args[@]+"${args[@]}"} \
+        "${GO_BASE}/api.php?action=${action}" 2>"$WORK/go.u.err")" || gc=000
+  pc="$(curl -sS --max-time 120 -D "$WORK/php.u.hdr" -o "$WORK/php.u.body" -w '%{http_code}' \
+        -H "Authorization: Bearer $TOKEN" -F "file=@${file}" ${args[@]+"${args[@]}"} \
+        "${PHP_BASE}/api.php?action=${action}" 2>"$WORK/php.u.err")" || pc=000
+
+  if [ "$gc" = "$pc" ]; then
+    ok "状态码 $gc"
+  else
+    bad "状态码 Go=$gc PHP=$pc"
+    say "     Go : $(head -c 300 "$WORK/go.u.body")"
+    say "     PHP: $(head -c 300 "$WORK/php.u.body")"
+    fail=$((fail+1))
+    return
+  fi
+
+  norm_upload "$WORK/go.u.body"  "$mask_size" > "$WORK/go.u.n"
+  norm_upload "$WORK/php.u.body" "$mask_size" > "$WORK/php.u.n"
+  if cmp -s "$WORK/go.u.n" "$WORK/php.u.n"; then
+    ok "响应体（已归一化随机 key）一致: $(cat "$WORK/go.u.n")"
+    pass=$((pass+1))
+    return
+  fi
+
+  norm_upload_ext "$WORK/go.u.body"  "$mask_size" > "$WORK/go.u.ne"
+  norm_upload_ext "$WORK/php.u.body" "$mask_size" > "$WORK/php.u.ne"
+  if cmp -s "$WORK/go.u.ne" "$WORK/php.u.ne"; then
+    say "  \033[33m⚠️ 仅扩展名不同（阶段 1 已知差异：Go 没有纯 Go 的 lossy webp 编码器，需要缩放时按有无 alpha 输出 png/jpg）\033[0m"
+    say "     Go : $(cat "$WORK/go.u.n")"
+    say "     PHP: $(cat "$WORK/php.u.n")"
+    pass=$((pass+1))
+    return
+  fi
+
+  bad "响应体差异:"
+  say "     Go : $(cat "$WORK/go.u.n")"
+  say "     PHP: $(cat "$WORK/php.u.n")"
+  fail=$((fail+1))
+}
+
+run_upload_cases() {
+  mk_upload_samples
+  local d="$WORK/samples"
+  upload_case user_avatar          "$d/small.png"    ""            0
+  upload_case social_image_upload  "$d/small.png"    ""            1
+  upload_case social_image_upload  "$d/big.png"      ""            1
+  upload_case social_image_upload  "$d/notimage.png" ""            0
+  upload_case social_video_upload  "$d/clip.mp4"     "video_w=1080" 1
+  upload_case social_video_upload  "$d/notimage.png" ""            0
+  upload_case upload               "$d/fake.apk"     "type=apk"    0
+  upload_case upload               "$d/big.png"      ""            1
+  upload_case upload               "$d/plain.txt"    ""            0
+  upload_case upload_apk           "$d/fake.apk"     ""            0
+}
+
 say "Go  : $GO_BASE   (被测)"
 say "PHP : $PHP_BASE  (基准, 纯 PHP 对照端点)"
 say "工作目录: $WORK"
@@ -153,6 +289,20 @@ for item in "${ACTIONS[@]}"; do
   a="${item%%|*}"; q="${item#*|}"
   selected "$a" && diff_case "$a" "$q"
 done
+
+if [ "$UPLOAD_CASES" = "1" ]; then
+  if [ -z "$TOKEN" ]; then
+    say ""
+    say "UPLOAD_CASES=1 需要 TOKEN=<登录 token>, 已跳过上传类 action"
+  else
+    say ""
+    say "阶段 1 上传类 action（写操作：会往对象存储写对象、user_avatar 会改 users.avatar）"
+    run_upload_cases
+  fi
+else
+  say ""
+  say "阶段 1 上传类 action 已跳过（写操作）。需要时: TOKEN=<token> UPLOAD_CASES=1 $0"
+fi
 
 say ""
 say "──────────────────────────────────────────"

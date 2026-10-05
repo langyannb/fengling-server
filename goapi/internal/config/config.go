@@ -42,6 +42,25 @@ type Config struct {
 	RedisPassword string
 	RedisDB       int
 
+	// S3（雨云对象存储；只从 /etc/fengling/goapi.env 读，绝不进仓库）。
+	// 这 6 项缺失时 main 会拒绝启动（见 MissingEnv）。
+	S3Endpoint  string
+	S3Bucket    string
+	S3Region    string
+	S3AccessKey string
+	S3SecretKey string
+	S3PublicURL string
+
+	// 上传：临时文件目录（空 = os.TempDir()，即 /tmp；systemd 单元是 PrivateTmp=no，
+	// 所以与 php-cgi 共用 /tmp 是安全的）与每人每窗口的上传次数限流。
+	UploadTmpDir     string
+	UploadRateLimit  int
+	UploadRateWindow time.Duration
+
+	// 视频清理常驻 ticker（语义等于 video_cleanup(true,true,true)）。
+	VideoCleanupInterval time.Duration
+	VideoCleanupInitial  time.Duration
+
 	// 时序参数（默认值与 PHP sse_run 完全一致）。
 	PollInterval time.Duration // 1s
 	SSEHeartbeat time.Duration // 10s
@@ -77,6 +96,20 @@ func Load() Config {
 		RedisAddr:     getStr("REDIS_ADDR", "127.0.0.1:6379"),
 		RedisPassword: getStr("REDIS_PASSWORD", ""),
 		RedisDB:       getInt("REDIS_DB", 0),
+
+		S3Endpoint:  getStr("S3_ENDPOINT", ""),
+		S3Bucket:    getStr("S3_BUCKET", ""),
+		S3Region:    getStr("S3_REGION", ""),
+		S3AccessKey: getStr("S3_ACCESS_KEY", ""),
+		S3SecretKey: getStr("S3_SECRET_KEY", ""),
+		S3PublicURL: getStr("S3_PUBLIC_URL", ""),
+
+		UploadTmpDir:     getStr("UPLOAD_TMP_DIR", ""),
+		UploadRateLimit:  getInt("UPLOAD_RATE_LIMIT", 30),
+		UploadRateWindow: getDur("UPLOAD_RATE_WINDOW", 10*time.Minute),
+
+		VideoCleanupInterval: getDur("VIDEO_CLEANUP_INTERVAL", 10*time.Minute),
+		VideoCleanupInitial:  getDur("VIDEO_CLEANUP_INITIAL", 30*time.Second),
 
 		PollInterval: getDur("POLL_INTERVAL", time.Second),
 		SSEHeartbeat: getDur("SSE_HEARTBEAT", 10*time.Second),
@@ -135,4 +168,48 @@ func parseLevel(s string) slog.Level {
 	default:
 		return slog.LevelInfo
 	}
+}
+
+// LocalZone 对齐 api.php:25 的 date_default_timezone_set('Asia/Shanghai')：
+// 对象键里的日期、以及视频清理的 keep_days 截止时间都按它算。
+// 刻意用固定时区而不是进程本地时区，避免服务器 TZ 与 PHP 不一致时整体错位。
+func LocalZone() *time.Location { return localZone }
+
+var localZone = func() *time.Location {
+	if loc, err := time.LoadLocation("Asia/Shanghai"); err == nil {
+		return loc
+	}
+	// 极端情况下系统没有 tzdata（容器里极少见）：固定 +08:00，结果仍然正确。
+	return time.FixedZone("CST", 8*3600)
+}()
+
+// MissingEnv 返回**缺失的必需环境变量**（契约第 5 节：缺任何一个键都要启动即
+// 报错退出，不要静默用默认值跑到线上）。
+//
+// 注意是直接看**环境变量本身**（env(key)），不是看 Load 解析后的值：这些键在 Load
+// 里都有生产默认值，只看 c.X 分辨不出「没配」和「配了默认值」。
+//
+// 为什么校验不放进 Load：Load 还要服务单测与本地开发（config_test.go 断言默认值），
+// 所以做成独立方法，由 main 在启动最前面调用。
+//
+// 不列入强制的键及理由：
+//   - DB_HOST / DB_PORT：只在 DB_SOCKET 为空时才用（PHP 的 host=localhost 就是 socket）；
+//     所以 DB_SOCKET 与 DB_HOST 做成「二选一」而不是硬要求 DB_SOCKET；
+//   - DB_CHARSET：默认 utf8mb4 与 config.php 一致，写错只会让中文乱码；
+//   - 其它时序参数：都有与 PHP 逐字一致的默认值。
+func (c Config) MissingEnv() []string {
+	keys := []string{
+		"GOAPI_ADDR", "DB_NAME", "DB_USER", "DB_PASS", "REDIS_ADDR",
+		"S3_ENDPOINT", "S3_BUCKET", "S3_REGION", "S3_ACCESS_KEY", "S3_SECRET_KEY", "S3_PUBLIC_URL",
+	}
+	missing := make([]string, 0, len(keys)+1)
+	for _, k := range keys {
+		if strings.TrimSpace(env(k)) == "" {
+			missing = append(missing, k)
+		}
+	}
+	if strings.TrimSpace(env("DB_SOCKET")) == "" && strings.TrimSpace(env("DB_HOST")) == "" {
+		missing = append(missing, "DB_SOCKET")
+	}
+	return missing
 }

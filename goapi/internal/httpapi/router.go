@@ -25,12 +25,23 @@ func New(env Env) *Router {
 func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodOptions {
 		setCORS(w.Header())
+		// 补一处阶段 0 的对齐差异：PHP 在 http_response_code(204) 时仍会带上默认的
+		// Content-Type: text/html; charset=UTF-8，Go 的 204 默认不带。
+		w.Header().Set("Content-Type", "text/html; charset=UTF-8")
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 
 	if r.URL.Path == "/ws" {
 		rt.handleWS(w, r)
+		return
+	}
+
+	// 阶段 1 新增的最小运维端点（契约第 6 节要求展示最近一次视频清理时间）。
+	// nginx 只反代 /api.php 与 /ws，所以它只在 127.0.0.1:9100 上可达。
+	if r.URL.Path == "/healthz" {
+		setCORS(w.Header())
+		rt.handleHealthz(w, r)
 		return
 	}
 
@@ -44,6 +55,24 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "stream":
 		setCORS(w.Header())
 		rt.handleStream(w, r)
+	case "user_avatar":
+		setCORS(w.Header())
+		rt.handleUserAvatar(w, r)
+	case "social_image_upload":
+		setCORS(w.Header())
+		rt.handleSocialImageUpload(w, r)
+	case "social_video_upload":
+		setCORS(w.Header())
+		rt.handleSocialVideoUpload(w, r)
+	case "upload":
+		setCORS(w.Header())
+		rt.handleUpload(w, r)
+	case "upload_apk":
+		setCORS(w.Header())
+		rt.handleUploadApk(w, r)
+	case "video_config":
+		setCORS(w.Header())
+		rt.handleVideoConfig(w, r)
 	default:
 		// 透传路径**不预设任何头**：CORS 由 PHP 自己发，避免重复。
 		rt.fcgi.Serve(w, r)

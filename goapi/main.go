@@ -16,8 +16,10 @@ import (
 
 	"github.com/langyannb/fengling-server/goapi/internal/config"
 	"github.com/langyannb/fengling-server/goapi/internal/httpapi"
+	"github.com/langyannb/fengling-server/goapi/internal/jobs"
 	"github.com/langyannb/fengling-server/goapi/internal/realtime"
 	"github.com/langyannb/fengling-server/goapi/internal/store"
+	"github.com/langyannb/fengling-server/goapi/internal/upload"
 )
 
 // 构建信息由 CI 用 -ldflags -X 注入：
@@ -33,6 +35,13 @@ func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.LogLevel}))
 	slog.SetDefault(logger)
 
+	// 契约第 5 节：必需环境变量（DB_* / REDIS_ADDR / S3_*）缺任何一个都**拒绝启动**，
+	// 不允许带着默认值跑到线上。校验放在 Load 之外，避免影响单测的默认值断言。
+	if missing := cfg.MissingEnv(); len(missing) > 0 {
+		logger.Error("缺少必需的环境变量, 拒绝启动", "missing", missing)
+		os.Exit(1)
+	}
+
 	st, err := store.Open(cfg, logger)
 	if err != nil {
 		logger.Error("MySQL 连接池初始化失败", "err", err)
@@ -43,6 +52,35 @@ func main() {
 	rd := store.NewRedis(cfg, logger)
 	defer rd.Close()
 
+	// S3 客户端：阶段 1 的原生上传与视频清理都要用。
+	s3c, err := upload.NewClient(upload.Options{
+		Endpoint:  cfg.S3Endpoint,
+		Bucket:    cfg.S3Bucket,
+		Region:    cfg.S3Region,
+		AccessKey: cfg.S3AccessKey,
+		SecretKey: cfg.S3SecretKey,
+		PublicURL: cfg.S3PublicURL,
+		Logger:    logger,
+	})
+	if err != nil {
+		// 错误信息里不含凭据（NewClient 只回「配置缺失/非法」，不回显值）。
+		logger.Error("S3 客户端初始化失败", "err", err)
+		os.Exit(1)
+	}
+
+	// 视频清理常驻任务：启动 30 秒后跑一次，之后每 10 分钟一次（可用
+	// VIDEO_CLEANUP_INITIAL / VIDEO_CLEANUP_INTERVAL 调），语义 = video_cleanup(true,true,true)。
+	cleaner := jobs.NewVideoCleaner(jobs.CleanerDeps{
+		Store:  st,
+		Object: s3c,
+		Redis:  rd,
+		Cfg:    cfg,
+		Log:    logger,
+	})
+	jobCtx, stopJobs := context.WithCancel(context.Background())
+	defer stopJobs()
+	go cleaner.Run(jobCtx)
+
 	engine := realtime.New(cfg, st, rd, logger)
 	defer engine.Close()
 
@@ -52,6 +90,8 @@ func main() {
 		Redis:     rd,
 		Engine:    engine,
 		Log:       logger,
+		S3:        s3c,
+		Cleaner:   cleaner,
 		Version:   buildVersion,
 		BuildTime: buildTime,
 		Started:   time.Now(),
@@ -76,6 +116,10 @@ func main() {
 			"php_script", cfg.PHPScript,
 			"mysql_socket", cfg.DBSocket,
 			"redis", cfg.RedisAddr,
+			"s3_endpoint", cfg.S3Endpoint,
+			"s3_bucket", cfg.S3Bucket,
+			"video_cleanup_interval", cfg.VideoCleanupInterval.String(),
+			"video_cleanup_initial", cfg.VideoCleanupInitial.String(),
 		)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Error("HTTP 服务异常退出", "err", err)
@@ -97,12 +141,17 @@ func main() {
 	shutdownDone := make(chan error, 1)
 	go func() { shutdownDone <- srv.Shutdown(shutdownCtx) }()
 
-	// ② 主动断开所有实时长连接，并等它们在各自的 defer 里跑完收尾（含 rd.MarkOffline）。
+	// ② 先停后台清理任务（它也在用 MySQL / Redis / S3）：必须在 engine.Close 与
+	//    defer rd.Close 之前收干净，避免「往已关闭的 Redis 客户端写 key」。
+	stopJobs()
+	cleaner.Stop()
+
+	// ③ 主动断开所有实时长连接，并等它们在各自的 defer 里跑完收尾（含 rd.MarkOffline）。
 	//    必须在 main 的 defer rd.Close() 之前完成，否则 MarkOffline 会打到已关闭的
 	//    Redis 客户端上（日志里的 `redis: client is closed` 就是这么来的）。
 	engine.Close()
 
-	// ③ 长连接都已收尾，Shutdown 正常会立刻返回；真超时也是长连接场景的正常现象，
+	// ④ 长连接都已收尾，Shutdown 正常会立刻返回；真超时也是长连接场景的正常现象，
 	//    降为 INFO，避免每次重启都报一条 WARN 吓人。
 	if err := <-shutdownDone; err != nil {
 		logger.Info("优雅关闭超时(实时长连接属正常现象)", "err", err)

@@ -38,6 +38,16 @@ const (
 	// ChannelEvents 是阶段 3/4 Pub/Sub 的频道名（本单只提供封装，不接管投递）。
 	ChannelEvents = "fls:events"
 
+	// 视频清理的「最近一次完成时间」。
+	//
+	// 键名冲突说明：阶段 1 契约 §6 明确要求写 `goapi:video:last_cleanup`（供 /healthz
+	// 展示），而阶段 0 合同附录 A 要求「所有键必须带 fls: 前缀」。两处都写、都带 TTL
+	// （一次 10 分钟的任务，多一条 SETEX 的代价可忽略），这样两边观察口径都能读到。
+	redisKeyVideoCleanup    = "goapi:video:last_cleanup"
+	redisKeyVideoCleanupFls = "fls:video:last_cleanup"
+
+	videoCleanupTTL = 24 * time.Hour
+
 	redisOpTimeout = 500 * time.Millisecond
 	warnEvery      = 30 * time.Second
 )
@@ -267,4 +277,43 @@ func (r *Redis) Clients() *redis.Client {
 		return nil
 	}
 	return r.client
+}
+
+// ---------- 视频清理时间戳 ----------
+
+// SetLastCleanup 记录本次清理完成时间（unix 秒），两个前缀都写、都带 24h TTL。
+// Redis 挂了只记日志，绝不返回错误打断清理任务。
+func (r *Redis) SetLastCleanup(ctx context.Context, at time.Time, ttl time.Duration) {
+	if !r.Enabled() {
+		return
+	}
+	if ttl <= 0 {
+		ttl = videoCleanupTTL
+	}
+	ctx, cancel := r.opCtx(ctx)
+	defer cancel()
+	val := at.Unix()
+	pipe := r.client.Pipeline()
+	pipe.Set(ctx, redisKeyVideoCleanup, val, ttl)
+	pipe.Set(ctx, redisKeyVideoCleanupFls, val, ttl)
+	if _, err := pipe.Exec(ctx); err != nil {
+		r.warn("SetLastCleanup", err)
+	}
+}
+
+// LastCleanup 读最近一次清理时间（unix 秒）；没有记录或 Redis 不可用时返回 (0,false)。
+func (r *Redis) LastCleanup(ctx context.Context) (int64, bool) {
+	if !r.Enabled() {
+		return 0, false
+	}
+	ctx, cancel := r.opCtx(ctx)
+	defer cancel()
+	n, err := r.client.Get(ctx, redisKeyVideoCleanup).Int64()
+	if err != nil {
+		if err != redis.Nil {
+			r.warn("LastCleanup", err)
+		}
+		return 0, false
+	}
+	return n, true
 }

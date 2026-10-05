@@ -42,3 +42,19 @@ func (rt *Router) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 	c.JSON(data, 0, "ok", 0)
 }
+
+// handleHealthz 是阶段 1 新增的最小运维端点。
+//
+// 契约第 6 节要求把「最近一次视频清理时间」写进 Redis（goapi:video:last_cleanup，
+// TTL 1 天）供 /healthz 展示；仓库里原本没有 /healthz，这里补上。
+// nginx 只反代 /api.php 与 /ws，所以它仅在 127.0.0.1:9100 上可达，不影响线上对比。
+func (rt *Router) handleHealthz(w http.ResponseWriter, r *http.Request) {
+	c := rt.env.newCtx(w, r, "healthz")
+	last := int64(0)
+	if at, ok := rt.env.Redis.LastCleanup(r.Context()); ok {
+		last = at
+	}
+	c.JSON(phpjson.New().
+		Set("ok", true).
+		Set("video_last_cleanup", last), 0, "ok", 0)
+}

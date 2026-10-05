@@ -95,6 +95,9 @@ type User struct {
 	Username string
 	Nickname string
 	Role     string
+	// IsActive 恒为 1（查询条件里已经带了 is_active=1，与 PHP current_user() 同构）。
+	// 上传 action 里仍按契约保留「你已被封禁」判定，与 PHP 的死分支语义一致。
+	IsActive int
 }
 
 // CurrentUser 对齐 api.php:3348 current_user()：
@@ -105,7 +108,7 @@ func (s *Store) CurrentUser(ctx context.Context, token string) (*User, error) {
 		return nil, nil
 	}
 	u, err := s.userBy(ctx,
-		`SELECT u.id, u.username, u.nickname, u.role
+		`SELECT u.id, u.username, u.nickname, u.role, u.is_active
 		   FROM sessions s JOIN users u ON s.user_id = u.id
 		  WHERE s.token = ? AND u.is_active = 1`, token)
 	if err != nil {
@@ -115,15 +118,16 @@ func (s *Store) CurrentUser(ctx context.Context, token string) (*User, error) {
 		return u, nil
 	}
 	return s.userBy(ctx,
-		`SELECT id, username, nickname, role FROM users WHERE token = ? AND is_active = 1`, token)
+		`SELECT id, username, nickname, role, is_active FROM users WHERE token = ? AND is_active = 1`, token)
 }
 
 func (s *Store) userBy(ctx context.Context, query string, args ...any) (*User, error) {
 	var (
 		id                       int64
 		username, nickname, role sql.NullString
+		isActive                 sql.NullInt64
 	)
-	err := s.db.QueryRowContext(ctx, query, args...).Scan(&id, &username, &nickname, &role)
+	err := s.db.QueryRowContext(ctx, query, args...).Scan(&id, &username, &nickname, &role, &isActive)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -135,6 +139,7 @@ func (s *Store) userBy(ctx context.Context, query string, args ...any) (*User, e
 		Username: username.String,
 		Nickname: nickname.String,
 		Role:     role.String,
+		IsActive: int(isActive.Int64),
 	}, nil
 }
 

@@ -14,8 +14,10 @@ import (
 	"time"
 
 	"github.com/langyannb/fengling-server/goapi/internal/config"
+	"github.com/langyannb/fengling-server/goapi/internal/jobs"
 	"github.com/langyannb/fengling-server/goapi/internal/realtime"
 	"github.com/langyannb/fengling-server/goapi/internal/store"
+	"github.com/langyannb/fengling-server/goapi/internal/upload"
 )
 
 // Env 是 Router 的依赖集合（main.go 组装一次，全程只读）。
@@ -25,6 +27,11 @@ type Env struct {
 	Redis  *store.Redis
 	Engine *realtime.Engine
 	Log    *slog.Logger
+
+	// S3 对象存储客户端（阶段 1 起原生上传用）。
+	S3 *upload.Client
+	// Cleaner 是视频清理任务（原生上传成功后复用 ticker 的同一份逻辑）。
+	Cleaner *jobs.VideoCleaner
 
 	Version   string    // -ldflags -X main.buildVersion
 	BuildTime string    // -ldflags -X main.buildTime
@@ -48,6 +55,11 @@ type Ctx struct {
 	body     map[string]any
 	formOnce sync.Once
 	form     url.Values
+
+	// mp 是流式 multipart 解析出的**文本部件**（等价 PHP 的 $_POST）。
+	// php://input 已经被 MultipartReader 消费，所以这里单独存一份；
+	// 参数优先级与 PHP 一致：JSON body → $_POST(这里) → $_GET。
+	mp url.Values
 }
 
 const maxBodyBytes = 8 << 20
@@ -62,6 +74,18 @@ func (e *Env) newCtx(w http.ResponseWriter, r *http.Request, action string) *Ctx
 	}
 	return c
 }
+
+// newCtxStreaming 用于 multipart 流式上传：**刻意不读请求体**。
+//
+// newCtx 会把 body 读进内存（上限 8MB），对上传请求不仅会把大文件截断，
+// 还会让 r.MultipartReader() 读到半截数据。上传类 action 一律用这个构造器，
+// 请求体由 upload.ReadMultipart 接管。
+func (e *Env) newCtxStreaming(w http.ResponseWriter, r *http.Request, action string) *Ctx {
+	return &Ctx{W: w, R: r, Action: action, Env: e, Query: r.URL.Query()}
+}
+
+// setMultipart 把流式解析出的文本部件交给 Param 使用。
+func (c *Ctx) setMultipart(vs url.Values) { c.mp = vs }
 
 // Log 返回带 action 的 logger。
 func (c *Ctx) Log() *slog.Logger {
@@ -110,6 +134,12 @@ func (c *Ctx) Param(key string) (any, bool) {
 	}
 	if f := c.PostForm(); f != nil {
 		if vs, ok := f[key]; ok && len(vs) > 0 {
+			return vs[0], true
+		}
+	}
+	// multipart 文本部件（后端顺序与 PHP 的 $_POST 一致：先于 $_GET）
+	if c.mp != nil {
+		if vs, ok := c.mp[key]; ok && len(vs) > 0 {
 			return vs[0], true
 		}
 	}
