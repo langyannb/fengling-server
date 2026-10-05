@@ -457,7 +457,7 @@ const pageList = computed(() => {
 
 async function loadApps() {
   loading.value = true
-  const r = await api('apps')
+  const r = await api('apps', { include_inactive: 1 })  // 管理员可见已下架软件
   loading.value = false
   if (r.code === 0) apps.value = r.data || []
   else pickList(r)
@@ -524,7 +524,7 @@ async function openApp(app) {
   origLinkIds.value = []
   showApp.value = true
   if (app && app.id) {
-    const r = await api('app_detail', { id: app.id })
+    const r = await api('app_detail', { id: app.id, include_inactive: 1 })  // 下架软件也能编辑
     if (r.code === 0 && r.data) {
       const d = r.data
       appForm.value = {
