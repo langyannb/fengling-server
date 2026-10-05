@@ -212,10 +212,13 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		setCORS(w.Header())
 		rt.handleHarmReport(w, r)
 
-	// ---------- 阶段 5A：抽奖（原生 14 个） ----------
-	// ⛔ 破坏性 4 个**刻意不注册**，落到 default 继续 FastCGI 透传 PHP：
-	//   admin_lottery_activity_reset / admin_lottery_codes_delete /
-	//   admin_lottery_prize_delete / admin_lottery_codes_import
+	// ---------- 阶段 5A：抽奖（原生 12 个） ----------
+	// ⛔ 下面 6 个**刻意不注册**，落到 default 继续 FastCGI 透传 PHP：
+	//   ① 破坏性 4 个：admin_lottery_activity_reset / admin_lottery_codes_delete /
+	//      admin_lottery_prize_delete / admin_lottery_codes_import；
+	//   ② 全表 UPDATE 2 个：admin_lottery_quota_reset_all / admin_lottery_quota_all
+	//      —— 验收脚本的安全门禁（FORBIDDEN_ADMIN）永不调用它们，保留透传可避免
+	//      「未经线上双跑验证就上线」；面板极少用，零风险。
 	case "lottery_info":
 		setCORS(w.Header())
 		rt.handleLotteryInfo(w, r)
@@ -252,12 +255,6 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "admin_lottery_quota_reset":
 		setCORS(w.Header())
 		rt.handleAdminLotteryQuotaReset(w, r)
-	case "admin_lottery_quota_reset_all":
-		setCORS(w.Header())
-		rt.handleAdminLotteryQuotaResetAll(w, r)
-	case "admin_lottery_quota_all":
-		setCORS(w.Header())
-		rt.handleAdminLotteryQuotaAll(w, r)
 	// 阶段 5A 附带：about / notice 的**读取**（写入侧继续透传）
 	case "about_config_get":
 		setCORS(w.Header())

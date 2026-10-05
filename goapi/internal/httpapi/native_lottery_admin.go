@@ -8,11 +8,14 @@ import (
 	"github.com/langyannb/fengling-server/goapi/internal/phpjson"
 )
 
-// 阶段 5A：后台抽奖管理的原生实现（api.php:1830-2227 里除破坏性 4 个之外的 11 个）。
+// 阶段 5A：后台抽奖管理的原生实现（api.php:1830-2227 里的 9 个）。
 //
-// ⛔ 刻意不在此文件实现（继续透传 PHP）：admin_lottery_prize_delete(1878)、
-// admin_lottery_codes_import(1934)、admin_lottery_codes_delete(1958)、
-// admin_lottery_activity_reset(2189)。理由见 native_lottery.go 顶部注释。
+// ⛔ 刻意不在此文件实现（继续透传 PHP）：
+//   破坏性 4 个 —— admin_lottery_prize_delete(1878)、admin_lottery_codes_import(1934)、
+//   admin_lottery_codes_delete(1958)、admin_lottery_activity_reset(2189)；
+//   全表 UPDATE 2 个 —— admin_lottery_quota_reset_all(2173)、admin_lottery_quota_all(2220)
+//   （验收脚本的安全门禁 FORBIDDEN_ADMIN 永不调用它们 ⇒ 无法线上双跑验证，保留透传）。
+// 理由见 native_lottery.go 顶部注释。
 
 // ---------- PHP 数组语义小工具 ----------
 
@@ -749,61 +752,4 @@ func (rt *Router) handleAdminLotteryQuotaReset(w http.ResponseWriter, r *http.Re
 		Set("drawn", drawn).
 		Set("today_drawn", todayDrawn).
 		Set("left", left), 0, "ok", 0)
-}
-
-// ---------- admin_lottery_quota_reset_all (api.php:2173) ----------
-
-func (rt *Router) handleAdminLotteryQuotaResetAll(w http.ResponseWriter, r *http.Request) {
-	c := rt.env.newCtx(w, r, "admin_lottery_quota_reset_all")
-	if _, ok := rt.requireAdminRow(c); !ok {
-		return
-	}
-	s := newLotteryScope(rt, c)
-	daily := c.paramSetInt("daily", 0) == 1
-	nowV, _, err := s.db().QueryValue(c.R.Context(), "SELECT NOW()")
-	if err != nil {
-		c.dbError(err)
-		return
-	}
-	nowDb := phpStr(nowV)
-	sql := "UPDATE users SET lottery_reset_at = ?"
-	args := []any{nowDb}
-	if daily {
-		sql += ", lottery_day_reset_at = ?"
-		args = append(args, nowDb)
-	}
-	res, err := s.db().Exec(c.R.Context(), sql, args...)
-	if err != nil {
-		c.dbError(err)
-		return
-	}
-	dailyFlag := int64(0)
-	if daily {
-		dailyFlag = 1
-	}
-	c.JSON(phpjson.New().Set("updated", res.RowsAffected).Set("daily", dailyFlag), 0, "ok", 0)
-}
-
-// ---------- admin_lottery_quota_all (api.php:2220) ----------
-
-func (rt *Router) handleAdminLotteryQuotaAll(w http.ResponseWriter, r *http.Request) {
-	c := rt.env.newCtx(w, r, "admin_lottery_quota_all")
-	if _, ok := rt.requireAdminRow(c); !ok {
-		return
-	}
-	s := newLotteryScope(rt, c)
-	quota := c.paramSetInt("quota", -1)
-	if quota < -1 {
-		quota = -1
-	}
-	if quota > 9999 {
-		c.Error("抽奖次数不能超过 9999", 1)
-		return
-	}
-	res, err := s.db().Exec(c.R.Context(), "UPDATE users SET lottery_quota = ?", quota)
-	if err != nil {
-		c.dbError(err)
-		return
-	}
-	c.JSON(phpjson.New().Set("updated", res.RowsAffected), 0, "ok", 0)
 }

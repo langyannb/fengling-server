@@ -11,29 +11,31 @@ import (
 // 阶段 5A 后台抽奖单测：逐字文案 / 校验顺序 / 403 落 HTTP 400 /
 // 破坏性 action 未注册（仍走透传）。
 
-// lotteryNativeActions 是本次原生接管的 14 个抽奖 action。
+// lotteryNativeActions 是本次原生接管的 12 个抽奖 action。
 var lotteryNativeActions = []string{
 	"lottery_info", "lottery_draw", "lottery_records",
 	"admin_lottery_prizes", "admin_lottery_prize_save", "admin_lottery_codes",
 	"admin_lottery_config_get", "admin_lottery_config_set", "admin_lottery_window_preview",
 	"admin_lottery_draws", "admin_lottery_quota_set", "admin_lottery_quota_reset",
-	"admin_lottery_quota_reset_all", "admin_lottery_quota_all",
 }
 
-// lotteryAdminActions 是 11 个需要 require_admin() 的原生后台接口。
+// lotteryAdminActions 是 9 个需要 require_admin() 的原生后台接口。
 var lotteryAdminActions = []string{
 	"admin_lottery_prizes", "admin_lottery_prize_save", "admin_lottery_codes",
 	"admin_lottery_config_get", "admin_lottery_config_set", "admin_lottery_window_preview",
 	"admin_lottery_draws", "admin_lottery_quota_set", "admin_lottery_quota_reset",
-	"admin_lottery_quota_reset_all", "admin_lottery_quota_all",
 }
 
-// lotteryDestructiveActions 是契约标为破坏性、**必须继续透传**的 4 个。
-var lotteryDestructiveActions = []string{
+// lotteryPassthroughActions 是**必须继续透传 PHP**的 6 个抽奖 action：
+// 契约 §9.1 标为破坏性的 4 个 + 两个「全表 UPDATE」级动作
+// （验收脚本的安全门禁 FORBIDDEN_ADMIN 永不调用它们 ⇒ 无法线上双跑验证）。
+var lotteryPassthroughActions = []string{
 	"admin_lottery_activity_reset",
 	"admin_lottery_codes_delete",
 	"admin_lottery_prize_delete",
 	"admin_lottery_codes_import",
+	"admin_lottery_quota_reset_all",
+	"admin_lottery_quota_all",
 }
 
 func TestAdminLotteryAuthCodes(t *testing.T) {
@@ -57,28 +59,28 @@ func TestAdminLotteryAuthCodes(t *testing.T) {
 	}
 }
 
-// TestDestructiveLotteryActionsStayPassthrough 是本次派单的硬约束：
-// 那 4 个破坏性 action **一个都不许**注册成原生 handler。
-func TestDestructiveLotteryActionsStayPassthrough(t *testing.T) {
+// TestLotteryPassthroughActionsStayPassthrough 是本次派单的硬约束：
+// 破坏性 4 个 + 全表 UPDATE 2 个，**一个都不许**注册成原生 handler。
+func TestLotteryPassthroughActionsStayPassthrough(t *testing.T) {
 	src, err := os.ReadFile("router.go")
 	if err != nil {
 		t.Fatalf("读 router.go 失败: %v", err)
 	}
 	code := string(src)
-	for _, a := range lotteryDestructiveActions {
+	for _, a := range lotteryPassthroughActions {
 		if strings.Contains(code, `case "`+a+`":`) {
-			t.Fatalf("破坏性 action %s 被注册成了原生分支（必须继续透传 PHP）", a)
+			t.Fatalf("action %s 被注册成了原生分支（必须继续透传 PHP）", a)
 		}
 	}
-	// 反向校验：14 个非破坏性抽奖 action 必须都已注册。
+	// 反向校验：12 个原生抽奖 action 必须都已注册。
 	for _, a := range lotteryNativeActions {
 		if !strings.Contains(code, `case "`+a+`":`) {
 			t.Fatalf("action %s 未在 router.go 注册", a)
 		}
 	}
-	// 行为校验：破坏性 action 落进 default 分支 → 走 FastCGI（此处 FPM 不可达，应回网关错误）。
+	// 行为校验：这些 action 落进 default 分支 → 走 FastCGI（此处 FPM 不可达，应回网关错误）。
 	brt := brokenRouter(t)
-	for _, a := range lotteryDestructiveActions {
+	for _, a := range lotteryPassthroughActions {
 		w := callAction(brt, "POST", "/api.php?action="+a, `{}`, "application/json", nil)
 		if w.Code != 500 || !strings.Contains(w.Body.String(), "网关无法连接 PHP-FPM") {
 			t.Fatalf("%s 没有走透传分支: HTTP=%d body=%s", a, w.Code, w.Body.String())
@@ -409,7 +411,6 @@ func TestAdminLotteryQuotaSetWording(t *testing.T) {
 	assertError(t, callLotteryAdmin(t, rt, "admin_lottery_quota_set", `{"user_id":0}`), 400, 1, "参数错误")
 	assertError(t, callLotteryAdmin(t, rt, "admin_lottery_quota_set", `{"user_id":1,"quota":10000}`), 400, 1, "抽奖次数不能超过 9999")
 	assertError(t, callLotteryAdmin(t, rt, "admin_lottery_quota_set", `{"user_id":999999}`), 400, 1, "用户不存在")
-	assertError(t, callLotteryAdmin(t, rt, "admin_lottery_quota_all", `{"quota":10000}`), 400, 1, "抽奖次数不能超过 9999")
 
 	t.Run("配额生效并返回 left", func(t *testing.T) {
 		f2 := newLotteryFake()
@@ -468,20 +469,4 @@ func TestAdminLotteryQuotaResetUsesDBTime(t *testing.T) {
 		}
 	}
 	t.Fatalf("重置标记必须用 DB 的 NOW(): %#v", ups[0].Args)
-}
-
-func TestAdminLotteryQuotaResetAllDailyFlag(t *testing.T) {
-	f := newLotteryFake()
-	f.execAffects = 46
-	w := callLotteryAdmin(t, newLotteryRouter(f), "admin_lottery_quota_reset_all", `{"daily":1}`)
-	if w.Body.String() != `{"code":0,"msg":"ok","data":{"updated":46,"daily":1}}` {
-		t.Fatalf("body=%s", w.Body.String())
-	}
-	ups := f.execs("UPDATE users SET lottery_reset_at")
-	if len(ups) != 1 || strings.Contains(ups[0].Query, " WHERE ") {
-		t.Fatalf("全表 UPDATE 不能带 WHERE: %v", ups)
-	}
-	if !strings.Contains(ups[0].Query, "lottery_day_reset_at") {
-		t.Fatalf("daily=1 必须同时写 lottery_day_reset_at")
-	}
 }

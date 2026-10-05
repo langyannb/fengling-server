@@ -29,10 +29,14 @@ import (
 //   - 抽奖事务内 UPDATE lottery_codes 的 rowCount **不检查**（契约 §4.4）；
 //   - 所有「现在」走数据库时钟 `SELECT UNIX_TIMESTAMP(NOW())`，不是进程时钟。
 //
-// ⛔ 本文件**刻意不实现**契约 §9.1 标为破坏性的 4 个 action：
-//   admin_lottery_activity_reset / admin_lottery_codes_delete /
-//   admin_lottery_prize_delete / admin_lottery_codes_import
-// 它们继续由 router.go 的 default 分支 FastCGI 透传给 PHP。
+// ⛔ 本文件**刻意不实现**下面 6 个 action，它们继续由 router.go 的 default 分支
+// FastCGI 透传给 PHP：
+//   ① 契约 §9.1 标为破坏性的 4 个：admin_lottery_activity_reset /
+//      admin_lottery_codes_delete / admin_lottery_prize_delete / admin_lottery_codes_import；
+//   ② 两个「全表 UPDATE」：admin_lottery_quota_reset_all / admin_lottery_quota_all
+//      —— 验收脚本的安全门禁（FORBIDDEN_ADMIN）永不调用它们，等于没法线上双跑验证，
+//      保留透传比「未经验证就上线」更稳；面板侧极少用。
+//      单用户的 admin_lottery_quota_reset 不受影响，仍是原生。
 
 // ---------- 事务原语 ----------
 
