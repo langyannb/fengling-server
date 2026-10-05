@@ -44,6 +44,7 @@
       <a-menu-item key="uc">UC 网盘</a-menu-item>
       <a-menu-item key="users">用户管理</a-menu-item>
       <a-menu-item key="lottery">抽奖管理</a-menu-item>
+      <a-menu-item key="video">视频消息</a-menu-item>
     </a-sub-menu>
   </a-menu>
 </template>

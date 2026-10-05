@@ -25,6 +25,7 @@ const routes = [
       { path: 'notify', name: 'notify', component: () => import('./views/Notify.vue'), meta: { title: '通知下发', icon: 'IconNotification', group: 'social' } },
       { path: 'pm', name: 'pm', component: () => import('./views/Pm.vue'), meta: { title: '私聊管理', icon: 'IconMessage', group: 'social' } },
       { path: 'lottery', name: 'lottery', component: () => import('./views/Lottery.vue'), meta: { title: '抽奖管理', icon: 'IconGift', group: 'settings' } },
+      { path: 'video', name: 'video', component: () => import('./views/Video.vue'), meta: { title: '视频消息', icon: 'IconVideoCamera', group: 'settings' } },
     ],
   },
   { path: '/:pathMatch(.*)*', redirect: '/stats' },

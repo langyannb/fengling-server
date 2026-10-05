@@ -752,7 +752,15 @@ try {
             if ($image !== '' && strpos($image, S3_PUBLIC_URL . '/chat/') !== 0) json_error('图片地址不合法');
             $imgW = max(0, (int)param('image_w', 0));
             $imgH = max(0, (int)param('image_h', 0));
-            if ($content === '' && $image === '') json_error('消息内容不能为空');
+            // 视频消息 (契约 Wave 2): 地址前缀强校验与图片一致, 尺寸/时长/大小只做范围兜底
+            $video = trim((string)param('video', ''));
+            if ($video !== '' && strpos($video, S3_PUBLIC_URL . '/chat/') !== 0) json_error('视频地址不合法');
+            list($vidW, $vidH, $vidDur, $vidSize) = video_meta_params();
+            if ($video !== '' && !db_has_column('social_pm_messages', 'video')) {
+                json_error('服务端未完成视频迁移, 请联系管理员');
+            }
+            $msgType = $video !== '' ? 'video' : '';
+            if ($content === '' && $image === '' && $video === '') json_error('消息内容不能为空');
             if (mb_strlen($content) > 500) json_error('消息不能超过 500 个字');
             $cid = pm_conv_id($meId, $toId, true);
             if ($cid <= 0) json_error('会话创建失败, 请稍后重试');
@@ -760,12 +768,22 @@ try {
             $st->execute([$meId]);
             $lastAt = $st->fetchColumn();
             if ($lastAt && strtotime($lastAt) > time() - 2) json_error('发送太快了, 请稍后再试');
-            db()->prepare('INSERT INTO social_pm_messages (conv_id, from_user, to_user, content, image, image_w, image_h, is_recalled)
-                VALUES (?, ?, ?, ?, ?, ?, ?, 0)')->execute([$cid, $meId, $toId, $content, $image, $imgW, $imgH]);
+            // 列先探测再拼 INSERT: 迁移没跑时自动退回旧的列组合 (图片消息行为一字不改)
+            $pcols = ['conv_id', 'from_user', 'to_user', 'content', 'image', 'image_w', 'image_h'];
+            $pvals = [$cid, $meId, $toId, $content, $image, $imgW, $imgH];
+            if (db_has_column('social_pm_messages', 'video')) {
+                array_push($pcols, 'video', 'video_w', 'video_h', 'video_duration', 'video_size');
+                array_push($pvals, $video, $vidW, $vidH, $vidDur, $vidSize);
+            }
+            if (db_has_column('social_pm_messages', 'msg_type')) { $pcols[] = 'msg_type'; $pvals[] = $msgType; }
+            $pcols[] = 'is_recalled';
+            $pvals[] = 0;
+            db()->prepare('INSERT INTO social_pm_messages (' . implode(', ', $pcols) . ') VALUES ('
+                . implode(', ', array_fill(0, count($pcols), '?')) . ')')->execute($pvals);
             $mid = (int)db()->lastInsertId();
             db()->prepare('UPDATE social_pms SET last_message_id = ?, last_at = NOW() WHERE id = ?')->execute([$mid, $cid]);
             $myName = (string)(((string)($me['nickname'] ?? '')) !== '' ? $me['nickname'] : ($me['username'] ?? ''));
-            $brief = $content !== '' ? mb_substr($content, 0, 60) : '[图片]';
+            $brief = $content !== '' ? mb_substr($content, 0, 60) : ($video !== '' ? '[视频]' : '[图片]');
             notify_merge($toId, $myName . ' 给你发来私聊', $brief, 'pm', 'pm:' . $cid . ':' . $mid);
             json_out(['id' => $mid, 'conv_id' => $cid, 'created_at' => date('Y-m-d H:i:s')]);
 
@@ -991,6 +1009,58 @@ try {
             if (!s3_upload_bytes($raw, $key, $mime)) json_error('上传失败, 请稍后重试');
             json_out(['url' => S3_PUBLIC_URL . '/' . $key, 'width' => $w, 'height' => $h]);
 
+        case 'video_config':
+            // 客户端只读视频配置 (只吐 enabled / max_mb, 后台字段不外泄); 无需登录, 前端启动即可拉
+            $vcfg = video_config();
+            json_out(['enabled' => (int)$vcfg['enabled'], 'max_mb' => (int)$vcfg['max_mb']]);
+
+        case 'social_video_upload':
+            // 群聊视频: 先上传拿到对象存储地址, 再带着这个地址调 social_send 发视频消息
+            // 上传成功后顺带跑一次容量/天数清理 (契约 Wave 2)
+            $me = current_user_or_401();
+            if ((int)$me['is_active'] !== 1) json_error('你已被封禁', 403);
+            $vcfg = video_config();
+            if ((int)$vcfg['enabled'] !== 1) json_error('视频消息功能未开启');
+            if (empty($_FILES['file'])) {
+                // 请求体超过 post_max_size 时 PHP 连 $_FILES 都不会建, 这里给一句能看懂的话
+                $clen = (int)($_SERVER['CONTENT_LENGTH'] ?? 0);
+                if ($clen > 0) json_error('文件超过服务器上传限制, 请压缩后再传');
+                json_error('未收到文件');
+            }
+            $file = $_FILES['file'];
+            if (!empty($file['error'])) {
+                $emap = [
+                    1 => '视频超过服务器上传限制',
+                    2 => '视频超过服务器上传限制',
+                    3 => '文件只上传了一部分, 请重试',
+                    4 => '未收到文件',
+                    6 => '服务器缺少临时目录',
+                    7 => '服务器写入失败',
+                    8 => '上传被服务器拦截',
+                ];
+                json_error($emap[(int)$file['error']] ?? ('上传失败 (代码 ' . (int)$file['error'] . ')'));
+            }
+            $vmaxBytes = (int)$vcfg['max_mb'] * 1024 * 1024;
+            if ((int)($file['size'] ?? 0) > $vmaxBytes) {
+                json_error('视频不能超过 ' . (int)$vcfg['max_mb'] . 'MB');
+            }
+            $raw = @file_get_contents($file['tmp_name']);
+            if ($raw === false || $raw === '') json_error('读取文件失败');
+            $ext = video_detect_ext($raw, (string)($file['name'] ?? ''));
+            if ($ext === '') json_error('只支持 mp4 / mov / mkv / webm 视频');
+            list($vw, $vh, $vd, $vs) = video_meta_params();
+            $key = s3_key('chat', $ext);
+            if (!s3_upload_bytes($raw, $key, video_ctype($ext))) json_error('上传失败, 请稍后重试');
+            $vclean = video_cleanup_if_needed();
+            json_out([
+                'url'      => S3_PUBLIC_URL . '/' . $key,
+                'size'     => strlen($raw),
+                'width'    => $vw,
+                'height'   => $vh,
+                'duration' => $vd,
+                'cleaned'  => (int)$vclean['deleted'],
+            ]);
+
         case 'social_send':
             $me = current_user_or_401();
             if ((int)$me['is_active'] !== 1) json_error('你已被封禁', 403);
@@ -1019,10 +1089,18 @@ try {
             if ($image !== '' && strpos($image, S3_PUBLIC_URL . '/chat/') !== 0) json_error('图片地址不合法');
             $imgW = max(0, (int)param('image_w', 0));
             $imgH = max(0, (int)param('image_h', 0));
-            if ($content === '' && $image === '') json_error('消息内容不能为空');
+            // 视频消息 (契约 Wave 2): 地址前缀强校验与图片一致, 尺寸/时长/大小只做范围兜底
+            $video = trim((string)param('video', ''));
+            if ($video !== '' && strpos($video, S3_PUBLIC_URL . '/chat/') !== 0) json_error('视频地址不合法');
+            list($vidW, $vidH, $vidDur, $vidSize) = video_meta_params();
+            if ($video !== '' && !db_has_column('social_messages', 'video')) {
+                json_error('服务端未完成视频迁移, 请联系管理员');
+            }
+            $msgType = $video !== '' ? 'video' : '';
+            if ($content === '' && $image === '' && $video === '') json_error('消息内容不能为空');
             if (mb_strlen($content) > 500) json_error('消息不能超过 500 个字');
-            // 图片消息在通知里统一显示 [图片]
-            $notifyText = $content !== '' ? mb_substr($content, 0, 80) : '[图片]';
+            // 图片/视频消息在通知里统一显示 [图片] / [视频]
+            $notifyText = $content !== '' ? mb_substr($content, 0, 80) : ($video !== '' ? '[视频]' : '[图片]');
             $st = db()->prepare('SELECT created_at FROM social_messages WHERE user_id = ? AND group_id = ? ORDER BY id DESC LIMIT 1');
             $st->execute([(int)$me['id'], $gid]);
             $last = $st->fetchColumn();
@@ -1047,8 +1125,18 @@ try {
                 $st->execute([$quoteId, $gid]);
                 if (!$st->fetchColumn()) $quoteId = 0;
             }
-            db()->prepare('INSERT INTO social_messages (group_id, user_id, content, image, image_w, image_h, at_users, quote_id, is_recalled) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)')
-                ->execute([$gid, (int)$me['id'], $content, $image, $imgW, $imgH, implode(',', $atStore), $quoteId]);
+            // 列先探测再拼 INSERT: 迁移没跑时自动退回旧的列组合 (图片/文字消息行为一字不改)
+            $scols = ['group_id', 'user_id', 'content', 'image', 'image_w', 'image_h', 'at_users', 'quote_id'];
+            $svals = [$gid, (int)$me['id'], $content, $image, $imgW, $imgH, implode(',', $atStore), $quoteId];
+            if (db_has_column('social_messages', 'video')) {
+                array_push($scols, 'video', 'video_w', 'video_h', 'video_duration', 'video_size');
+                array_push($svals, $video, $vidW, $vidH, $vidDur, $vidSize);
+            }
+            if (db_has_column('social_messages', 'msg_type')) { $scols[] = 'msg_type'; $svals[] = $msgType; }
+            $scols[] = 'is_recalled';
+            $svals[] = 0;
+            db()->prepare('INSERT INTO social_messages (' . implode(', ', $scols) . ') VALUES ('
+                . implode(', ', array_fill(0, count($scols), '?')) . ')')->execute($svals);
             $mid = (int)db()->lastInsertId();
             if ($atAll) {
                 $st = db()->prepare('SELECT id FROM users WHERE is_active = 1 AND id <> ?');
@@ -1073,7 +1161,7 @@ try {
                 foreach ($at as $aid) { $atSet[(int)$aid] = true; }
                 $mutedIds = mute_user_ids($gid);
                 $senderName = (string)(($me['nickname'] ?? '') !== '' ? $me['nickname'] : ($me['username'] ?? ''));
-                $brief = $content !== '' ? mb_substr($content, 0, 60) : '[图片]';
+                $brief = $content !== '' ? mb_substr($content, 0, 60) : ($video !== '' ? '[视频]' : '[图片]');
                 $st = db()->prepare('SELECT id FROM users WHERE is_active = 1 AND id <> ?');
                 $st->execute([(int)$me['id']]);
                 foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $uid) {
@@ -1946,6 +2034,64 @@ try {
             $pwin['daily_total_limit'] = (int)$pcfg['daily_total_limit'];
             json_out($pwin);
 
+        case 'admin_video_config_get':
+            require_admin();
+            // 顺便把占用统计带上, 后台卡片一次请求就能渲染
+            $vout = video_config();
+            $vout['usage'] = video_usage_stats();
+            $vout['server_upload_max_mb'] = video_server_max_mb();
+            json_out($vout);
+
+        case 'admin_video_config_set':
+            require_admin();
+            $vcfg = video_config();
+            $vmax = (int)param('max_mb', (int)$vcfg['max_mb']);
+            if ($vmax < 1) json_error('单个视频上限不能小于 1MB');
+            if ($vmax > 500) json_error('单个视频不能超过 500MB');
+            $svrMax = video_server_max_mb();
+            if ($svrMax > 0 && $vmax > $svrMax) {
+                json_error('单个视频上限不能超过服务器上传上限 (' . $svrMax . 'MB), 请先调大 php.ini 的 upload_max_filesize');
+            }
+            $vtotal = (int)param('total_limit_mb', (int)$vcfg['total_limit_mb']);
+            if ($vtotal < 100) json_error('总容量上限不能小于 100MB');
+            if ($vtotal > 100000) json_error('总容量上限不能超过 100000MB');
+            if ($vtotal < $vmax) json_error('总容量上限不能小于单个视频上限');
+            $vdays = (int)param('keep_days', (int)$vcfg['keep_days']);
+            if ($vdays < 0) json_error('保留天数不能为负数');
+            if ($vdays > 3650) json_error('保留天数不能超过 3650 天');
+            $vnew = [
+                'enabled'        => video_flag(param('enabled', (int)$vcfg['enabled'])),
+                'max_mb'         => $vmax,
+                'total_limit_mb' => $vtotal,
+                'keep_days'      => $vdays,
+                'auto_clean'     => video_flag(param('auto_clean', (int)$vcfg['auto_clean'])),
+            ];
+            video_config_save($vnew);
+            $vnew['usage'] = video_usage_stats();
+            json_out($vnew);
+
+        case 'admin_video_usage':
+            require_admin();
+            $vuse = video_usage_stats();
+            $vuse['total_mb'] = round($vuse['total_bytes'] / 1048576, 2);
+            $vuse['max_mb']   = round($vuse['max_size'] / 1048576, 2);
+            $vuse['config']   = video_config();
+            // 后台卡片用: 服务器自己允许的上传上限 (可能小于配置里的 max_mb, 那样配了也传不上去)
+            $vuse['server_upload_max_mb'] = video_server_max_mb();
+            json_out($vuse);
+
+        case 'admin_video_clean':
+            require_admin();
+            // mode=over_limit: 只按总容量裁掉最旧的; mode=all: 清空全部视频
+            // 手动清理是管理员的明确动作, 不受 auto_clean=0 限制
+            $vmode = (string)param('mode', 'over_limit');
+            if ($vmode !== 'over_limit' && $vmode !== 'all') json_error('清理模式不合法');
+            $vres = ($vmode === 'all') ? video_clean_all() : video_cleanup(true, false, false);
+            $vres['mode'] = $vmode;
+            $vres['freed_mb'] = round($vres['freed_bytes'] / 1048576, 2);
+            $vres['usage'] = video_usage_stats();
+            json_out($vres);
+
         case 'admin_lottery_draws':
             require_admin();
             $page = max(1, (int)param('page', 1));
@@ -2154,6 +2300,8 @@ try {
                     'to_name'     => (string)(((string)($m['to_nickname'] ?? '')) !== '' ? $m['to_nickname'] : ($m['to_username'] ?? '')),
                     'content'     => (string)($m['content'] ?? ''),
                     'image'       => (string)($m['image'] ?? ''),
+                    'msg_type'    => ((string)($m['video'] ?? '') !== '' ? 'video' : (string)($m['msg_type'] ?? '')),
+                    'video'       => (string)($m['video'] ?? ''),
                     'is_recalled' => (int)$m['is_recalled'],
                     'created_at'  => (string)$m['created_at'],
                 ];
@@ -3405,6 +3553,11 @@ function social_group_public(array $g, int $muted = 0, int $unread = 0, int $fir
             'nickname'   => (string)(((string)($last['nickname'] ?? '')) !== '' ? $last['nickname'] : ($last['username'] ?? '')),
             'content'    => (string)($last['content'] ?? ''),
             'image'      => (string)($last['image'] ?? ''),
+            'msg_type'   => (string)($last['msg_type'] ?? ''),
+            'video'      => (string)($last['video'] ?? ''),
+            'video_w'    => (int)($last['video_w'] ?? 0),
+            'video_h'    => (int)($last['video_h'] ?? 0),
+            'video_duration' => (int)($last['video_duration'] ?? 0),
             'created_at' => (string)($last['created_at'] ?? ''),
         ];
     }
@@ -3465,6 +3618,11 @@ function social_msg_public(array $m): array
         'image'       => $recalled ? '' : (string)($m['image'] ?? ''),
         'image_w'     => $recalled ? 0 : (int)($m['image_w'] ?? 0),
         'image_h'     => $recalled ? 0 : (int)($m['image_h'] ?? 0),
+        'video'          => $recalled ? '' : (string)($m['video'] ?? ''),
+        'video_w'        => $recalled ? 0 : (int)($m['video_w'] ?? 0),
+        'video_h'        => $recalled ? 0 : (int)($m['video_h'] ?? 0),
+        'video_duration' => $recalled ? 0 : (int)($m['video_duration'] ?? 0),
+        'video_size'     => $recalled ? 0 : (int)($m['video_size'] ?? 0),
         'at'          => $at,
         'quote_id'      => (int)($m['quote_id'] ?? 0),
         'quote_nickname' => $recalled ? '' : (string)($m['quote_nickname'] ?? ''),
@@ -3534,7 +3692,10 @@ function sse_run(array $me, int $pmCur, int $grpCur): void
         }
 
         // ---- 私聊: 别人发给我的、未撤回的 (契约 A4, 只用参数绑定) ----
-        $st = db()->prepare('SELECT m.id, m.conv_id, m.from_user, m.content, m.image, m.created_at,
+        // 视频列先探测再拼 SELECT: 迁移没跑时自动省略, SSE 不会因为新列挂掉
+        $vselPm = db_has_column('social_pm_messages', 'video')
+            ? ', m.video, m.video_w, m.video_h, m.video_duration, m.video_size' : '';
+        $st = db()->prepare('SELECT m.id, m.conv_id, m.from_user, m.content, m.image' . $vselPm . ', m.created_at,
                                     u.nickname, u.username
                                FROM social_pm_messages m JOIN users u ON u.id = m.from_user
                               WHERE m.to_user = :me AND m.id > :cur AND m.is_recalled = 0
@@ -3551,12 +3712,20 @@ function sse_run(array $me, int $pmCur, int $grpCur): void
                 'username'   => (string)($r['username'] ?? ''),
                 'content'    => (string)($r['content'] ?? ''),
                 'image'      => (string)($r['image'] ?? ''),
+                'msg_type'   => (($r['video'] ?? '') !== '' ? 'video' : ''),
+                'video'          => (string)($r['video'] ?? ''),
+                'video_w'        => (int)($r['video_w'] ?? 0),
+                'video_h'        => (int)($r['video_h'] ?? 0),
+                'video_duration' => (int)($r['video_duration'] ?? 0),
+                'video_size'     => (int)($r['video_size'] ?? 0),
                 'created_at' => (string)($r['created_at'] ?? ''),
             ]);
         }
 
         // ---- 群消息: 我以外的人发的、未撤回的 (契约 A4) ----
-        $st = db()->prepare('SELECT m.id, m.group_id, m.user_id, m.content, m.image, m.at_users, m.msg_type, m.created_at,
+        $vselGrp = db_has_column('social_messages', 'video')
+            ? ', m.video, m.video_w, m.video_h, m.video_duration, m.video_size' : '';
+        $st = db()->prepare('SELECT m.id, m.group_id, m.user_id, m.content, m.image, m.at_users, m.msg_type' . $vselGrp . ', m.created_at,
                                     u.nickname, g.name AS group_name
                                FROM social_messages m
                                JOIN users u ON u.id = m.user_id
@@ -3584,6 +3753,11 @@ function sse_run(array $me, int $pmCur, int $grpCur): void
                 'nickname'   => (string)(($r['nickname'] ?? '') !== '' ? $r['nickname'] : ('用户' . (int)$r['user_id'])),
                 'content'    => (string)($r['content'] ?? ''),
                 'image'      => (string)($r['image'] ?? ''),
+                'video'          => (string)($r['video'] ?? ''),
+                'video_w'        => (int)($r['video_w'] ?? 0),
+                'video_h'        => (int)($r['video_h'] ?? 0),
+                'video_duration' => (int)($r['video_duration'] ?? 0),
+                'video_size'     => (int)($r['video_size'] ?? 0),
                 'at_me'      => $atMe,
                 'at_all'     => $atAll,
                 'muted'      => isset($mutedIds[(int)$r['group_id']]) ? 1 : 0,
@@ -3681,6 +3855,272 @@ function user_tags_str(string $raw): string
     return implode(',', $out);
 }
 
+// ==================== 视频消息 (契约 Wave 2 / 服务端) ====================
+
+/** 视频配置默认值 (存在 settings.video_config) */
+/** 表里有没有这一列 (静态缓存, 每次请求最多查一次): 迁移未跑时让新代码自动退回旧行为 */
+function db_has_column(string $table, string $column): bool
+{
+    static $cache = [];
+    $k = $table . '.' . $column;
+    if (!array_key_exists($k, $cache)) {
+        $cache[$k] = false;
+        try {
+            $st = db()->query('SHOW COLUMNS FROM `' . $table . '` LIKE ' . db()->quote($column));
+            $cache[$k] = (bool)$st->fetch();
+        } catch (Exception $e) { error_log('[db_has_column] ' . $e->getMessage()); }
+    }
+    return $cache[$k];
+}
+
+/** php.ini 里的 128M / 1G 这类值转成字节数 (0 = 不限或无法识别) */
+function ini_bytes(string $val): int
+{
+    $val = trim($val);
+    if ($val === '' || $val === '-1') return 0;
+    $unit = strtolower(substr($val, -1));
+    $num = (float)$val;
+    if ($unit === 'g') return (int)round($num * 1073741824);
+    if ($unit === 'm') return (int)round($num * 1048576);
+    if ($unit === 'k') return (int)round($num * 1024);
+    return (int)$num;
+}
+
+/** 服务器实际允许的上传上限 (MB): upload_max_filesize 与 post_max_size 取小的那个, 0 = 不限 */
+function video_server_max_mb(): int
+{
+    $a = ini_bytes((string)ini_get('upload_max_filesize'));
+    $b = ini_bytes((string)ini_get('post_max_size'));
+    if ($a <= 0 && $b <= 0) return 0;
+    if ($a <= 0) return (int)floor($b / 1048576);
+    if ($b <= 0) return (int)floor($a / 1048576);
+    return (int)floor(min($a, $b) / 1048576);
+}
+
+function video_config_default(): array
+{
+    return [
+        'enabled'        => 1,
+        'max_mb'         => 100,
+        'total_limit_mb' => 600,
+        'keep_days'      => 0,
+        'auto_clean'     => 1,
+    ];
+}
+
+/** 0/1 归一化 (与 lottery_flag 同一套语义) */
+function video_flag($v): int
+{
+    return lottery_flag($v);
+}
+
+/** 读取视频配置 (settings.video_config): 缺失/越界一律回落到合法默认值 */
+function video_config(): array
+{
+    $cfg = video_config_default();
+    try {
+        $raw = setting_get('video_config', '');
+        if ($raw !== '') {
+            $j = json_decode($raw, true);
+            if (is_array($j)) $cfg = array_merge($cfg, $j);
+        }
+    } catch (Exception $e) { error_log('[video_config] ' . $e->getMessage()); }
+    $clamp = function ($v, $min, $max) { $v = (int)$v; if ($v < $min) $v = $min; if ($v > $max) $v = $max; return $v; };
+    $cfg['enabled']        = video_flag($cfg['enabled'] ?? 1);
+    $cfg['auto_clean']     = video_flag($cfg['auto_clean'] ?? 1);
+    $cfg['max_mb']         = $clamp($cfg['max_mb'] ?? 100, 1, 500);
+    $cfg['total_limit_mb'] = $clamp($cfg['total_limit_mb'] ?? 600, 100, 100000);
+    $cfg['keep_days']      = $clamp($cfg['keep_days'] ?? 0, 0, 3650);
+    return $cfg;
+}
+
+/** 保存视频配置 */
+function video_config_save(array $cfg): void
+{
+    setting_set('video_config', json_encode($cfg, JSON_UNESCAPED_UNICODE));
+}
+
+/** 扩展名 -> 上传 Content-Type */
+function video_ctype(string $ext): string
+{
+    $map = ['mp4' => 'video/mp4', 'mov' => 'video/quicktime', 'mkv' => 'video/x-matroska', 'webm' => 'video/webm'];
+    return $map[$ext] ?? 'application/octet-stream';
+}
+
+/** 视频真实性判定: finfo 优先, 再用文件头兜底, 最后看文件名后缀; 不支持返回 '' */
+function video_detect_ext(string $raw, string $name = ''): string
+{
+    $byMime = [
+        'video/mp4'        => 'mp4',
+        'video/quicktime'  => 'mov',
+        'video/x-matroska' => 'mkv',
+        'video/webm'       => 'webm',
+        'video/x-m4v'      => 'mp4',
+        'application/mp4'  => 'mp4',
+    ];
+    if (function_exists('finfo_open')) {
+        $fi = @finfo_open(FILEINFO_MIME_TYPE);
+        if ($fi) {
+            $mime = strtolower(trim((string)@finfo_buffer($fi, $raw)));
+            @finfo_close($fi);
+            if (isset($byMime[$mime])) return $byMime[$mime];
+        }
+    }
+    $head = substr($raw, 0, 64);
+    // mp4 / mov: 第 5~8 字节是 'ftyp', 再看 brand ('qt  ' = QuickTime)
+    if (strlen($head) >= 12 && substr($head, 4, 4) === 'ftyp') {
+        return strtolower(substr($head, 8, 4)) === 'qt  ' ? 'mov' : 'mp4';
+    }
+    // mkv / webm: EBML 头 1A 45 DF A3, DocType 里带 webm 就是 webm
+    if (strlen($head) >= 4 && substr($head, 0, 4) === "\x1A\x45\xDF\xA3") {
+        return stripos($head, 'webm') !== false ? 'webm' : 'mkv';
+    }
+    $ext = strtolower((string)pathinfo($name, PATHINFO_EXTENSION));
+    return in_array($ext, ['mp4', 'mov', 'mkv', 'webm'], true) ? $ext : '';
+}
+
+/** 视频尺寸/时长/大小参数 (客户端传值, 服务端只做范围兜底): 返回 [w, h, duration, size] */
+function video_meta_params(): array
+{
+    $w = (int)param('video_w', 0);
+    $h = (int)param('video_h', 0);
+    $d = (int)param('video_duration', 0);
+    $s = (int)param('video_size', 0);
+    if ($w < 0 || $w > 10000 || $h < 0 || $h > 10000) json_error('视频尺寸参数不合法');
+    if ($d < 0 || $d > 3600) json_error('视频时长参数不合法 (最长 60 分钟)');
+    if ($s < 0 || $s > 2147483647) json_error('视频大小参数不合法');
+    return [$w, $h, $d, $s];
+}
+
+/** 从对象存储地址反推 key (只接受本站地址, 其它一律返回 '') */
+function video_key_from_url(string $url): string
+{
+    $prefix = S3_PUBLIC_URL . '/';
+    if ($url === '' || strpos($url, $prefix) !== 0) return '';
+    return substr($url, strlen($prefix));
+}
+
+/**
+ * 视频占用统计: 条数 / 总字节 / 最大单条 / 最老一条 / 已清理条数
+ * 口径: 只统计 video 非空的行 (清理过的行 video 已置空, 不会再重复计入)
+ */
+function video_usage_stats(): array
+{
+    $out = ['count' => 0, 'total_bytes' => 0, 'max_size' => 0, 'max_size_id' => 0,
+            'oldest_at' => '', 'oldest_id' => 0, 'cleaned_count' => 0];
+    foreach (['social_messages', 'social_pm_messages'] as $tb) {
+        try {
+            $st = db()->query("SELECT COUNT(*) AS c, COALESCE(SUM(video_size), 0) AS s FROM `$tb`
+                               WHERE video IS NOT NULL AND video <> ''");
+            $r = $st->fetch() ?: [];
+            $out['count'] += (int)($r['c'] ?? 0);
+            $out['total_bytes'] += (int)($r['s'] ?? 0);
+            $st = db()->query("SELECT id, video_size FROM `$tb` WHERE video IS NOT NULL AND video <> ''
+                               ORDER BY video_size DESC LIMIT 1");
+            $r = $st->fetch();
+            if ($r && (int)$r['video_size'] > (int)$out['max_size']) {
+                $out['max_size'] = (int)$r['video_size'];
+                $out['max_size_id'] = (int)$r['id'];
+            }
+            $st = db()->query("SELECT id, created_at FROM `$tb` WHERE video IS NOT NULL AND video <> ''
+                               ORDER BY created_at ASC, id ASC LIMIT 1");
+            $r = $st->fetch();
+            if ($r && ((string)$out['oldest_at'] === '' || (string)$r['created_at'] < (string)$out['oldest_at'])) {
+                $out['oldest_at'] = (string)$r['created_at'];
+                $out['oldest_id'] = (int)$r['id'];
+            }
+            $st = db()->query("SELECT COUNT(*) FROM `$tb` WHERE (video IS NULL OR video = '')
+                               AND content LIKE '%[视频已清理]%'");
+            $out['cleaned_count'] += (int)$st->fetchColumn();
+        } catch (Exception $e) { error_log('[video_usage] ' . $tb . ' ' . $e->getMessage()); }
+    }
+    return $out;
+}
+
+/**
+ * 视频清理主逻辑 (群消息 + 私聊消息一起算)
+ *   - $byCapacity: 总字节 > total_limit_mb 时按 created_at ASC 删最旧的
+ *   - $byDays:     keep_days > 0 时删掉超过保留天数的
+ *   - $respectAutoClean: true 时 auto_clean=0 只统计不删 (上传后的自动清理走这个)
+ * 消息记录保留: video 置空 + content 追加 [视频已清理]; video_size 保留做审计
+ *
+ * @return array{deleted:int, freed_bytes:int, visited:int, skipped:string}
+ */
+function video_cleanup(bool $byCapacity, bool $byDays, bool $respectAutoClean): array
+{
+    $out = ['deleted' => 0, 'freed_bytes' => 0, 'visited' => 0, 'skipped' => ''];
+    $cfg = video_config();
+    $rows = [];
+    foreach (['social_messages', 'social_pm_messages'] as $tb) {
+        try {
+            $st = db()->query("SELECT id, video, video_size, created_at FROM `$tb`
+                               WHERE video IS NOT NULL AND video <> '' ORDER BY created_at ASC, id ASC");
+            foreach ($st->fetchAll() as $r) {
+                $rows[] = ['table' => $tb, 'id' => (int)$r['id'], 'video' => (string)$r['video'],
+                           'size' => (int)$r['video_size'], 'created_at' => (string)$r['created_at']];
+            }
+        } catch (Exception $e) { error_log('[video_cleanup] ' . $tb . ' ' . $e->getMessage()); }
+    }
+    $out['visited'] = count($rows);
+    if (!$rows) return $out;
+    if ($respectAutoClean && (int)$cfg['auto_clean'] !== 1) {
+        $out['skipped'] = 'auto_clean=0 只统计不删除';
+        return $out;
+    }
+    $total = 0;
+    foreach ($rows as $r) { $total += $r['size']; }
+    $limitBytes = (int)$cfg['total_limit_mb'] * 1024 * 1024;
+    $deadline = ($byDays && (int)$cfg['keep_days'] > 0) ? (time() - (int)$cfg['keep_days'] * 86400) : 0;
+    $doomed = [];
+    foreach ($rows as $i => $r) {
+        $ts = strtotime($r['created_at']);
+        if ($deadline > 0 && $ts > 0 && $ts < $deadline) { $doomed[$i] = true; $total -= $r['size']; continue; }
+        if ($byCapacity && $total > $limitBytes) { $doomed[$i] = true; $total -= $r['size']; }
+    }
+    foreach (array_keys($doomed) as $i) { video_cleanup_one($rows[$i], $out); }
+    return $out;
+}
+
+/** 上传成功后的自动清理 (契约 Wave 2): auto_clean=0 时只统计不删 */
+function video_cleanup_if_needed(): array
+{
+    return video_cleanup(true, true, true);
+}
+
+/** 清空全部视频 (后台「清空全部视频」): 消息保留, video 置空 + content 追加 [视频已清理] */
+function video_clean_all(): array
+{
+    $out = ['deleted' => 0, 'freed_bytes' => 0, 'visited' => 0, 'skipped' => ''];
+    foreach (['social_messages', 'social_pm_messages'] as $tb) {
+        try {
+            $st = db()->query("SELECT id, video, video_size, created_at FROM `$tb`
+                               WHERE video IS NOT NULL AND video <> '' ORDER BY created_at ASC, id ASC");
+            foreach ($st->fetchAll() as $r) {
+                $out['visited']++;
+                video_cleanup_one(['table' => $tb, 'id' => (int)$r['id'], 'video' => (string)$r['video'],
+                                   'size' => (int)$r['video_size'], 'created_at' => (string)$r['created_at']], $out);
+            }
+        } catch (Exception $e) { error_log('[video_clean_all] ' . $tb . ' ' . $e->getMessage()); }
+    }
+    return $out;
+}
+
+/** 清理单条: 删 S3 对象 + 消息里 video 置空并追加 [视频已清理] */
+function video_cleanup_one(array $row, array &$out): void
+{
+    $key = video_key_from_url((string)$row['video']);
+    if ($key !== '') @s3_delete($key);
+    try {
+        db()->prepare("UPDATE `{$row['table']}` SET video = '', content = CONCAT(content, '[视频已清理]') WHERE id = ?")
+            ->execute([(int)$row['id']]);
+    } catch (Exception $e) {
+        error_log('[video_cleanup_one] ' . $e->getMessage());
+        return;
+    }
+    $out['deleted']++;
+    $out['freed_bytes'] += (int)$row['size'];
+}
+
 function setting_get(string $key, string $default = ''): string
 {
     $st = db()->prepare('SELECT `value` FROM settings WHERE `key` = ?');
@@ -3728,7 +4168,9 @@ function group_last_messages(array $gids): array
     $gids = array_values(array_filter(array_map('intval', $gids)));
     if (!$gids) return [];
     $in = implode(',', array_fill(0, count($gids), '?'));
-    $st = db()->prepare("SELECT m.id, m.group_id, m.user_id, m.content, m.image, m.created_at,
+    $vselLast = db_has_column('social_messages', 'video')
+        ? ', m.video, m.video_w, m.video_h, m.video_duration, m.video_size' : '';
+    $st = db()->prepare("SELECT m.id, m.group_id, m.user_id, m.content, m.image, m.msg_type" . $vselLast . ", m.created_at,
                 u.nickname, u.username
             FROM social_messages m LEFT JOIN users u ON u.id = m.user_id
             WHERE m.is_recalled = 0
@@ -3803,6 +4245,9 @@ function pm_other_id(array $conv, int $meId): int
 function pm_msg_public(array $m, int $meId): array
 {
     $recalled = (int)($m['is_recalled'] ?? 0) === 1;
+    $vurl = (string)($m['video'] ?? '');
+    $mtype = (string)($m['msg_type'] ?? '');
+    if ($mtype === '' && $vurl !== '') $mtype = 'video';
     return [
         'id'          => (int)$m['id'],
         'conv_id'     => (int)$m['conv_id'],
@@ -3812,6 +4257,12 @@ function pm_msg_public(array $m, int $meId): array
         'image'       => $recalled ? '' : (string)($m['image'] ?? ''),
         'image_w'     => $recalled ? 0 : (int)($m['image_w'] ?? 0),
         'image_h'     => $recalled ? 0 : (int)($m['image_h'] ?? 0),
+        'msg_type'    => $recalled ? '' : $mtype,
+        'video'          => $recalled ? '' : $vurl,
+        'video_w'        => $recalled ? 0 : (int)($m['video_w'] ?? 0),
+        'video_h'        => $recalled ? 0 : (int)($m['video_h'] ?? 0),
+        'video_duration' => $recalled ? 0 : (int)($m['video_duration'] ?? 0),
+        'video_size'     => $recalled ? 0 : (int)($m['video_size'] ?? 0),
         'is_recalled' => $recalled ? 1 : 0,
         'mine'        => ((int)$m['from_user'] === $meId) ? 1 : 0,
         'created_at'  => (string)($m['created_at'] ?? ''),
