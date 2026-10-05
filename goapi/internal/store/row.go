@@ -34,62 +34,31 @@ type ExecResult struct {
 	RowsAffected int64
 }
 
+// querier 是 *sql.DB 与 *sql.Tx 的公共子集：Store（自动提交）与 Tx（显式事务）
+// 共用同一套扫描逻辑，避免两处各写一份 QueryRow/QueryAll 而产生行为漂移。
+type querier interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
 // QueryRow 跑一条查询并取第一行；没有行时返回 (nil, nil)（对齐 PDO fetch() 的 false）。
 func (s *Store) QueryRow(ctx context.Context, query string, args ...any) (Row, error) {
-	rows, err := s.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	if !rows.Next() {
-		if err := rows.Err(); err != nil {
-			return nil, err
-		}
-		return nil, nil
-	}
-	row, err := scanRow(rows)
-	if err != nil {
-		return nil, err
-	}
-	return row, nil
+	return queryRow(ctx, s.db, query, args...)
 }
 
 // QueryAll 跑一条查询并把所有行读进内存（对齐 PDO fetchAll()）。
 func (s *Store) QueryAll(ctx context.Context, query string, args ...any) ([]Row, error) {
-	rows, err := s.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []Row
-	for rows.Next() {
-		row, err := scanRow(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, row)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return out, nil
+	return queryAll(ctx, s.db, query, args...)
 }
 
 // Exec 执行一条写语句（INSERT / UPDATE / DELETE）。
 func (s *Store) Exec(ctx context.Context, query string, args ...any) (ExecResult, error) {
-	res, err := s.db.ExecContext(ctx, query, args...)
-	if err != nil {
-		return ExecResult{}, err
-	}
-	var out ExecResult
-	// 两个取不到都不算错误：DELETE 没有 lastInsertId，驱动也可能不支持。
-	if id, err := res.LastInsertId(); err == nil {
-		out.LastInsertID = id
-	}
-	if n, err := res.RowsAffected(); err == nil {
-		out.RowsAffected = n
-	}
-	return out, nil
+	return execOne(ctx, s.db, query, args...)
+}
+
+// QueryValue 取「第一行第一列」，对齐 PDO 的 fetchColumn()。
+func (s *Store) QueryValue(ctx context.Context, query string, args ...any) (any, bool, error) {
+	return queryValue(ctx, s.db, query, args...)
 }
 
 // CurrentUserRow 对齐 api.php:3348 current_user()，但取**整行**（SELECT u.*）。
@@ -112,6 +81,87 @@ func (s *Store) CurrentUserRow(ctx context.Context, token string) (Row, error) {
 		return row, nil
 	}
 	return s.QueryRow(ctx, `SELECT * FROM users WHERE token = ? AND is_active = 1`, token)
+}
+
+func queryRow(ctx context.Context, q querier, query string, args ...any) (Row, error) {
+	rows, err := q.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	}
+	row, err := scanRow(rows)
+	if err != nil {
+		return nil, err
+	}
+	return row, nil
+}
+
+func queryAll(ctx context.Context, q querier, query string, args ...any) ([]Row, error) {
+	rows, err := q.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Row
+	for rows.Next() {
+		row, err := scanRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func execOne(ctx context.Context, q querier, query string, args ...any) (ExecResult, error) {
+	res, err := q.ExecContext(ctx, query, args...)
+	if err != nil {
+		return ExecResult{}, err
+	}
+	var out ExecResult
+	// 两个取不到都不算错误：DELETE 没有 lastInsertId，驱动也可能不支持。
+	if id, err := res.LastInsertId(); err == nil {
+		out.LastInsertID = id
+	}
+	if n, err := res.RowsAffected(); err == nil {
+		out.RowsAffected = n
+	}
+	return out, nil
+}
+
+func queryValue(ctx context.Context, q querier, query string, args ...any) (any, bool, error) {
+	rows, err := q.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, false, err
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return nil, false, err
+		}
+		return nil, false, nil
+	}
+	var v any
+	if err := rows.Scan(&v); err != nil {
+		return nil, false, err
+	}
+	switch x := v.(type) {
+	case []byte:
+		return string(x), true, nil
+	case nil:
+		return nil, true, nil
+	default:
+		return x, true, nil
+	}
 }
 
 // scanRow 按列名把当前行读成 Row。
@@ -142,37 +192,4 @@ func scanRow(rows *sql.Rows) (Row, error) {
 		}
 	}
 	return row, nil
-}
-
-// QueryValue 取「第一行第一列」，对齐 PDO 的 fetchColumn()。
-//
-// 为什么单独有这个原语：COUNT(*) / MAX(id) 这类查询，PHP 写的是
-// `SELECT COUNT(*) FROM ...`（没有别名），用 Row 取会因为列名是 "COUNT(*)"
-// 而被迫给 SQL 加别名 —— 那属于「顺手改 SQL」。这里按列序取值，
-// 保证 Go 发给 MySQL 的语句与 PHP 逐字相同。
-// 第二个返回值 = 有没有取到行（PHP 里 fetchColumn() 返回 false 的情形）。
-func (s *Store) QueryValue(ctx context.Context, query string, args ...any) (any, bool, error) {
-	rows, err := s.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, false, err
-	}
-	defer rows.Close()
-	if !rows.Next() {
-		if err := rows.Err(); err != nil {
-			return nil, false, err
-		}
-		return nil, false, nil
-	}
-	var v any
-	if err := rows.Scan(&v); err != nil {
-		return nil, false, err
-	}
-	switch x := v.(type) {
-	case []byte:
-		return string(x), true, nil
-	case nil:
-		return nil, true, nil
-	default:
-		return x, true, nil
-	}
 }
