@@ -46,6 +46,22 @@ func (o *O) Get(k string) (any, bool) {
 	return nil, false
 }
 
+// Put 是 PHP 的 `$arr[$k] = $v` 语义：键已存在则**原位改值**（输出顺序不变），
+// 否则追加到末尾。Set 只做追加，所以「先构造全量默认值、再逐字段覆盖」的场景必须用 Put
+// （抽奖的 lottery_window_state / lottery_config 都是这种写法）。
+func (o *O) Put(k string, v any) *O {
+	for i, key := range o.keys {
+		if key == k {
+			o.vals[i] = v
+			return o
+		}
+	}
+	return o.Set(k, v)
+}
+
+// Keys 返回键的插入顺序（只读快照，调用方不得修改底层切片）。
+func (o *O) Keys() []string { return o.keys }
+
 // Marshal 等价于 PHP 的 json_encode($v, JSON_UNESCAPED_UNICODE)（紧凑、无空格换行）。
 func Marshal(v any) []byte {
 	return appendValue(make([]byte, 0, 256), v)
