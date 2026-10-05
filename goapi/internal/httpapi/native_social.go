@@ -821,7 +821,7 @@ func (rt *Router) handleSocialGroup(w http.ResponseWriter, r *http.Request) {
 	adminList := make([]any, 0, len(admins))
 	for _, a := range admins {
 		adminList = append(adminList, phpjson.New().
-			Set("id", rowRaw(a, "id")).
+			Set("id", rowInt(a, "id", 0)).
 			Set("nickname", rowRaw(a, "nickname")).
 			Set("username", rowRaw(a, "username")))
 	}

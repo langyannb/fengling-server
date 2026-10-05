@@ -1496,7 +1496,7 @@ func TestSocialGroupGolden(t *testing.T) {
 		`"last_time":"2026-01-03 10:00:00","at_me":1,"at_me_first":12,"at_all":0,"at_all_first":0,` +
 		`"id":5,"name":"测试群","icon":"","description":"","notice":"","member_count":4,"is_member":1,` +
 		`"message_count":0,"sort_order":0,"is_active":1,"all_muted":0,"created_at":"2026-01-01 10:00:00"},` +
-		`"notice":"","admins":[{"id":"1","nickname":"管理员","username":"root"}]}}`
+		`"notice":"","admins":[{"id":1,"nickname":"管理员","username":"root"}]}}`
 	if w.Body.String() != want {
 		t.Fatalf("响应不一致\n got=%s\nwant=%s", w.Body.String(), want)
 	}
