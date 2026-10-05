@@ -1625,3 +1625,81 @@ func TestSocialRoutesAreNative(t *testing.T) {
 		}
 	}
 }
+
+// before/after 分页：before 先倒序取一页再反转成正序；after 直接正序返回。
+func TestSocialMessagesBeforeAndAfterPaging(t *testing.T) {
+	newDB := func() (*socialFakeDB, *[]string) {
+		var seen []string
+		db := &socialFakeDB{me: socialMe(), rules: []socialRule{
+			{match: "SELECT * FROM social_groups WHERE id = ?", rows: []store.Row{socialGroupRow()}},
+		}}
+		db.allFn = func(q string, args []any) ([]store.Row, error) {
+			switch {
+			case strings.Contains(q, "m.id < ? ORDER BY m.id DESC"):
+				seen = append(seen, "before")
+				return []store.Row{srow("id", 7), srow("id", 5)}, nil
+			case strings.Contains(q, "m.id > ? ORDER BY m.id ASC"):
+				seen = append(seen, "after")
+				return []store.Row{srow("id", 8), srow("id", 9)}, nil
+			}
+			return nil, nil
+		}
+		return db, &seen
+	}
+	ids := func(w *httptest.ResponseRecorder) []float64 {
+		list := dataOf(t, w)["list"].([]any)
+		var out []float64
+		for _, it := range list {
+			out = append(out, it.(map[string]any)["id"].(float64))
+		}
+		return out
+	}
+
+	db, seen := newDB()
+	rt := newSocialRouter(db, migratedCols(), nil)
+	w := callSocial(t, rt, "social_messages", `{"token":"t","group_id":5,"before_id":10}`)
+	got := ids(w)
+	if len(got) != 2 || got[0] != 5 || got[1] != 7 {
+		t.Fatalf("before 分页顺序=%v, 期望 [5 7]（倒序取一页后反转）", got)
+	}
+	if len(*seen) != 1 || (*seen)[0] != "before" {
+		t.Fatalf("走了 %v, 期望只有 before", *seen)
+	}
+
+	db2, seen2 := newDB()
+	rt2 := newSocialRouter(db2, migratedCols(), nil)
+	w2 := callSocial(t, rt2, "social_messages", `{"token":"t","group_id":5,"after_id":7}`)
+	got2 := ids(w2)
+	if len(got2) != 2 || got2[0] != 8 || got2[1] != 9 {
+		t.Fatalf("after 分页顺序=%v, 期望 [8 9]", got2)
+	}
+	if len(*seen2) != 1 || (*seen2)[0] != "after" {
+		t.Fatalf("走了 %v, 期望只有 after", *seen2)
+	}
+}
+
+// limit 的钳制：min(50, max(1, ...))。
+func TestSocialMessagesLimitClamp(t *testing.T) {
+	for _, tc := range []struct {
+		body string
+		want int64
+	}{
+		{`{"token":"t","group_id":5,"limit":999}`, 50},
+		{`{"token":"t","group_id":5,"limit":0}`, 1},
+		{`{"token":"t","group_id":5,"limit":-3}`, 1},
+		{`{"token":"t","group_id":5}`, 30},
+	} {
+		db := &socialFakeDB{me: socialMe(), rules: []socialRule{
+			{match: "SELECT * FROM social_groups WHERE id = ?", rows: []store.Row{socialGroupRow()}},
+		}}
+		rt := newSocialRouter(db, migratedCols(), nil)
+		callSocial(t, rt, "social_messages", tc.body)
+		q := db.queries("ORDER BY m.id DESC LIMIT ?")
+		if len(q) != 1 {
+			t.Fatalf("默认分支查询次数=%d (%s)", len(q), tc.body)
+		}
+		if got := phpInt(q[0].Args[len(q[0].Args)-1]); got != tc.want {
+			t.Fatalf("limit=%d, 期望 %d (%s)", got, tc.want, tc.body)
+		}
+	}
+}
