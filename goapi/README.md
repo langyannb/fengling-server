@@ -75,8 +75,12 @@ tools/goapi_diff.sh         双跑逐字对比
 - **gzip 由后端自己压**：`Accept-Encoding` 里含 `gzip`（大小写敏感子串，同 PHP `strpos`）就
   gzip 并加 `Content-Encoding: gzip`；gzip 头对齐 PHP（level 6、mtime=0、OS=3）。
   deflate 流不保证与 zlib 逐字节相同（**解压后**一定相同）。nginx 侧因此 `gzip off`。
-- **CORS**：原生 action 与 `OPTIONS`（→204）由 Go 发三头；**透传路径一个头都不预设**，
+- **CORS**：原生 action、`OPTIONS`（→204）、以及**所有由 Go 直接生成的错误响应**
+  （`gatewayError`、`请求体过大`、`读取请求体失败`）都发三头；**透传成功路径一个头都不预设**，
   因为 PHP 自己会发，重复设置会出现重复响应头。
+- **错误文案**：原生 action / 网关兜底的 `msg` 里**绝不出现 Go 的文件名或行号**
+  （PHP 也从不对客户端暴露路径），一律 `服务器错误: <原因>`，细节只写进结构化日志。
+  例如 `version` 读库失败 → `500 {"code":500,"msg":"服务器错误: dial unix …","data":null}`。
 - **未知 action 不自己回 404**，一律透传，由 PHP 回 `404 未知操作: xxx`。
 - **SSE**：先 `retry: 2000\n\n`（**不**立刻发心跳），首个 `: hb\n\n` 在第 10 秒；
   10 秒心跳、25 秒封顶（`event: bye\ndata: {"reason":"timeout"}`）；游标 `pm_id/group_id <= 0`

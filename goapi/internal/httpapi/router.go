@@ -55,7 +55,9 @@ func (rt *Router) handleStream(w http.ResponseWriter, r *http.Request) {
 	c := rt.env.newCtx(w, r, "stream")
 	me, err := rt.env.Store.CurrentUser(r.Context(), c.Token())
 	if err != nil {
-		c.Error("服务器错误: "+err.Error()+" @ goapi/native_stream.go", 500)
+		// 同 version：文案里不带任何 Go 文件名/行号，细节只进日志。
+		c.Log().Error("stream 鉴权查询失败", "err", err)
+		c.Error("服务器错误: "+err.Error(), 500)
 		return
 	}
 	if me == nil {

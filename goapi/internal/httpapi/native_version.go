@@ -29,7 +29,9 @@ func (rt *Router) handleVersion(w http.ResponseWriter, r *http.Request) {
 
 	raw, hasRow, err := rt.env.Store.SettingValue(r.Context(), "latest_version")
 	if err != nil {
-		c.Error("服务器错误: "+err.Error()+" @ goapi/native_version.go", 500)
+		// 只把原因给客户端（PHP 从不暴露文件路径），细节进日志。
+		c.Log().Error("version 读 settings 失败", "err", err)
+		c.Error("服务器错误: "+err.Error(), 500)
 		return
 	}
 	if hasRow {

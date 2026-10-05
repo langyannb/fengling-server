@@ -183,6 +183,9 @@ func (f *FCGI) params(r *http.Request, contentLength int64) map[string]string {
 // （`{"code":-1,"msg":"…"}`，没有 data 键）与 http_response_code(500)。
 func (f *FCGI) gatewayError(w http.ResponseWriter, msg string) {
 	f.log.Error("PHP-FPM 透传失败", "err", msg)
+	// Go 自己生成的响应同样要带 CORS 三头（PHP 的每个响应都有）；
+	// 注意只在这里补：**透传成功**的响应绝不能补，否则会与 PHP 发的重复。
+	setCORS(w.Header())
 	h := w.Header()
 	h.Set("Content-Type", "application/json; charset=utf-8")
 	h.Set("Cache-Control", "no-store")
