@@ -258,6 +258,13 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "admin_lottery_quota_all":
 		setCORS(w.Header())
 		rt.handleAdminLotteryQuotaAll(w, r)
+	// 阶段 5A 附带：about / notice 的**读取**（写入侧继续透传）
+	case "about_config_get":
+		setCORS(w.Header())
+		rt.handleAboutConfigGet(w, r)
+	case "notice_get":
+		setCORS(w.Header())
+		rt.handleNoticeGet(w, r)
 	default:
 		// 透传路径**不预设任何头**：CORS 由 PHP 自己发，避免重复。
 		rt.fcgi.Serve(w, r)
