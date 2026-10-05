@@ -7,10 +7,17 @@
  * 只加列/加配置, 不改任何已有数据; 先跑这个脚本再更新 api.php 即可。
  * 用法: /www/server/php/85/bin/php tools/install_video.php
  *
- * 另外: PHP 默认 upload_max_filesize/post_max_size=50M, 100MB 级别的视频会先被 PHP 拦掉。
- * 站点根目录的 .user.ini 需要写上 (只影响本站点, 不动全局 php.ini):
- *   upload_max_filesize = 128M
- *   post_max_size = 140M
+ * 另外: 100MB 级别的视频会被 Web 层的两个限制拦掉, 两处都要放开 (都是本站点级, 不动全局):
+ *   1) PHP: PHP 默认 upload_max_filesize/post_max_size=50M。站点根目录 .user.ini 写上
+ *        upload_max_filesize = 128M
+ *        post_max_size = 140M
+ *      改完 /etc/init.d/php-fpm-85 reload (user_ini.cache_ttl 默认 300s, 等缓存过期再验)。
+ *      CLI 的 php -i 看不到 .user.ini, 必须用 web 语境探针确认真实生效值。
+ *   2) nginx: 站点 vhost (/www/server/panel/vhost/nginx/flfxk.conf) 的
+ *        client_max_body_size 必须大于「视频上限 + multipart 开销」, 否则 nginx 直接 413
+ *        (nginx 的 413 是 nginx 自己返回的 HTML, 不是 api.php 的 JSON 错误)。
+ *      线上实测: 100m 会被 100MB 视频的 multipart 开销顶掉, 已改为 150m;
+ *        /www/server/nginx/sbin/nginx -t && /etc/init.d/nginx reload
  */
 require_once __DIR__ . '/../config.php';
 

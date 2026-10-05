@@ -755,6 +755,8 @@ try {
             // 视频消息 (契约 Wave 2): 地址前缀强校验与图片一致, 尺寸/时长/大小只做范围兜底
             $video = trim((string)param('video', ''));
             if ($video !== '' && strpos($video, S3_PUBLIC_URL . '/chat/') !== 0) json_error('视频地址不合法');
+            // 视频消息功能关闭时不能再发出视频消息 (契约 Wave 2: 未开启一律中文报错)
+            if ($video !== '' && (int)video_config()['enabled'] !== 1) json_error('视频消息功能未开启');
             list($vidW, $vidH, $vidDur, $vidSize) = video_meta_params();
             if ($video !== '' && !db_has_column('social_pm_messages', 'video')) {
                 json_error('服务端未完成视频迁移, 请联系管理员');
@@ -1092,6 +1094,8 @@ try {
             // 视频消息 (契约 Wave 2): 地址前缀强校验与图片一致, 尺寸/时长/大小只做范围兜底
             $video = trim((string)param('video', ''));
             if ($video !== '' && strpos($video, S3_PUBLIC_URL . '/chat/') !== 0) json_error('视频地址不合法');
+            // 视频消息功能关闭时不能再发出视频消息 (契约 Wave 2: 未开启一律中文报错)
+            if ($video !== '' && (int)video_config()['enabled'] !== 1) json_error('视频消息功能未开启');
             list($vidW, $vidH, $vidDur, $vidSize) = video_meta_params();
             if ($video !== '' && !db_has_column('social_messages', 'video')) {
                 json_error('服务端未完成视频迁移, 请联系管理员');
@@ -3966,17 +3970,22 @@ function video_detect_ext(string $raw, string $name = ''): string
             if (isset($byMime[$mime])) return $byMime[$mime];
         }
     }
-    $head = substr($raw, 0, 64);
-    // mp4 / mov: 第 5~8 字节是 'ftyp', 再看 brand ('qt  ' = QuickTime)
-    if (strlen($head) >= 12 && substr($head, 4, 4) === 'ftyp') {
-        return strtolower(substr($head, 8, 4)) === 'qt  ' ? 'mov' : 'mp4';
+    $head = substr($raw, 0, 4096);
+    // mp4 / mov: 认 ftyp box。正常在 4~8 字节, 少数文件前面还有 free/wide box, 所以在前 4KB 里找。
+    // brand 'qt  ' = QuickTime; m4a/m4b/m4p 是纯音频, 不算视频
+    $pos = strpos($head, 'ftyp');
+    if ($pos !== false && $pos >= 4) {
+        $brand = strtolower(substr($head, $pos + 4, 4));
+        if (strpos($brand, 'm4a') !== 0 && strpos($brand, 'm4b') !== 0 && strpos($brand, 'm4p') !== 0) {
+            return $brand === 'qt  ' ? 'mov' : 'mp4';
+        }
     }
     // mkv / webm: EBML 头 1A 45 DF A3, DocType 里带 webm 就是 webm
-    if (strlen($head) >= 4 && substr($head, 0, 4) === "\x1A\x45\xDF\xA3") {
+    if (strlen($raw) >= 4 && substr($raw, 0, 4) === "\x1A\x45\xDF\xA3") {
         return stripos($head, 'webm') !== false ? 'webm' : 'mkv';
     }
-    $ext = strtolower((string)pathinfo($name, PATHINFO_EXTENSION));
-    return in_array($ext, ['mp4', 'mov', 'mkv', 'webm'], true) ? $ext : '';
+    // 认不出容器就返回空: 不再拿扩展名兜底 (否则随便一个文件改名成 .mp4 就能传上来)
+    return '';
 }
 
 /** 视频尺寸/时长/大小参数 (客户端传值, 服务端只做范围兜底): 返回 [w, h, duration, size] */

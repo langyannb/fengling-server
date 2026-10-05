@@ -19,7 +19,9 @@
 
           <a-form-item label="单个视频上限 (MB)">
             <a-input-number v-model="form.max_mb" :min="1" :max="500" :precision="0" style="width: 100%" />
-            <div class="form-tip">1 - 500 MB，且不能超过服务器上传上限。</div>
+            <div class="form-tip">
+              1 - 500 MB，且不能超过服务器上传上限（当前 {{ serverMax > 0 ? serverMax + ' MB' : '未知' }}）。
+            </div>
           </a-form-item>
 
           <a-form-item label="总容量上限 (MB)">
@@ -57,6 +59,10 @@
           <div class="usage-item"><span class="k">最大单条</span><span class="v">{{ maxMb }} MB</span></div>
           <div class="usage-item"><span class="k">最老一条</span><span class="v">{{ usage.oldest_at || '—' }}</span></div>
           <div class="usage-item"><span class="k">已清理条数</span><span class="v">{{ num(usage.cleaned_count) }} 条</span></div>
+          <div class="usage-item">
+            <span class="k">服务器上传上限</span>
+            <span class="v">{{ serverMax > 0 ? serverMax + ' MB' : '未知' }}</span>
+          </div>
         </div>
 
         <a-divider class="usage-divider" />
@@ -127,6 +133,10 @@ async function load() {
 
 async function save() {
   const f = form.value
+  if (serverMax.value > 0 && num(f.max_mb) > serverMax.value) {
+    Message.error('单个视频上限不能超过服务器上传上限（' + serverMax.value + ' MB）')
+    return
+  }
   saving.value = true
   try {
     const r = await api('admin_video_config_set', {
