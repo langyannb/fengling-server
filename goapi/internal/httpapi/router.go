@@ -211,6 +211,53 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "harm_report":
 		setCORS(w.Header())
 		rt.handleHarmReport(w, r)
+
+	// ---------- 阶段 5A：抽奖（原生 14 个） ----------
+	// ⛔ 破坏性 4 个**刻意不注册**，落到 default 继续 FastCGI 透传 PHP：
+	//   admin_lottery_activity_reset / admin_lottery_codes_delete /
+	//   admin_lottery_prize_delete / admin_lottery_codes_import
+	case "lottery_info":
+		setCORS(w.Header())
+		rt.handleLotteryInfo(w, r)
+	case "lottery_draw":
+		setCORS(w.Header())
+		rt.handleLotteryDraw(w, r)
+	case "lottery_records":
+		setCORS(w.Header())
+		rt.handleLotteryRecords(w, r)
+	case "admin_lottery_prizes":
+		setCORS(w.Header())
+		rt.handleAdminLotteryPrizes(w, r)
+	case "admin_lottery_prize_save":
+		setCORS(w.Header())
+		rt.handleAdminLotteryPrizeSave(w, r)
+	case "admin_lottery_codes":
+		setCORS(w.Header())
+		rt.handleAdminLotteryCodes(w, r)
+	case "admin_lottery_config_get":
+		setCORS(w.Header())
+		rt.handleAdminLotteryConfigGet(w, r)
+	case "admin_lottery_config_set":
+		setCORS(w.Header())
+		rt.handleAdminLotteryConfigSet(w, r)
+	case "admin_lottery_window_preview":
+		setCORS(w.Header())
+		rt.handleAdminLotteryWindowPreview(w, r)
+	case "admin_lottery_draws":
+		setCORS(w.Header())
+		rt.handleAdminLotteryDraws(w, r)
+	case "admin_lottery_quota_set":
+		setCORS(w.Header())
+		rt.handleAdminLotteryQuotaSet(w, r)
+	case "admin_lottery_quota_reset":
+		setCORS(w.Header())
+		rt.handleAdminLotteryQuotaReset(w, r)
+	case "admin_lottery_quota_reset_all":
+		setCORS(w.Header())
+		rt.handleAdminLotteryQuotaResetAll(w, r)
+	case "admin_lottery_quota_all":
+		setCORS(w.Header())
+		rt.handleAdminLotteryQuotaAll(w, r)
 	default:
 		// 透传路径**不预设任何头**：CORS 由 PHP 自己发，避免重复。
 		rt.fcgi.Serve(w, r)
