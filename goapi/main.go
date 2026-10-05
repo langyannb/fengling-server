@@ -88,11 +88,24 @@ func main() {
 	<-stop
 
 	logger.Info("收到退出信号, 开始优雅关闭")
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+
+	// 关闭顺序是这个网关的关键：
+	// ① srv.Shutdown 会立刻关掉监听套接字（不再收新连接），但它要等所有在途请求结束，
+	//    而 SSE 最长 25 秒、WS 更是永不自行结束 —— 所以必须和 ② 并发做，否则必定超时。
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := srv.Shutdown(shutdownCtx); err != nil {
-		logger.Warn("优雅关闭超时", "err", err)
-	}
+	shutdownDone := make(chan error, 1)
+	go func() { shutdownDone <- srv.Shutdown(shutdownCtx) }()
+
+	// ② 主动断开所有实时长连接，并等它们在各自的 defer 里跑完收尾（含 rd.MarkOffline）。
+	//    必须在 main 的 defer rd.Close() 之前完成，否则 MarkOffline 会打到已关闭的
+	//    Redis 客户端上（日志里的 `redis: client is closed` 就是这么来的）。
 	engine.Close()
+
+	// ③ 长连接都已收尾，Shutdown 正常会立刻返回；真超时也是长连接场景的正常现象，
+	//    降为 INFO，避免每次重启都报一条 WARN 吓人。
+	if err := <-shutdownDone; err != nil {
+		logger.Info("优雅关闭超时(实时长连接属正常现象)", "err", err)
+	}
 	logger.Info("goapi 已退出")
 }

@@ -133,6 +133,7 @@ func (e *Engine) wsReadPump(ctx context.Context, ws *websocket.Conn, c *conn) {
 
 		var msg struct {
 			Type string          `json:"type"`
+			T    json.RawMessage `json:"t"`
 			Data json.RawMessage `json:"data"`
 		}
 		if json.Unmarshal(raw, &msg) != nil {
@@ -140,9 +141,10 @@ func (e *Engine) wsReadPump(ctx context.Context, ws *websocket.Conn, c *conn) {
 		}
 		switch msg.Type {
 		case "ping":
-			e.hub.dispatch(c, phpjson.Marshal(phpjson.New().
-				Set("type", "pong").
-				Set("data", phpjson.New().Set("t", time.Now().Unix()))))
+			// 回显客户端的 t：既接受 `{"type":"ping","t":123}`（顶层），
+			// 也接受 `{"type":"ping","data":{"t":123}}`（契约里的 data 形态）。
+			// t 用 RawMessage 收，避免客户端发浮点/字符串时把整个 ping 帧丢掉。
+			e.hub.dispatch(c, pongFrame(msg.T, msg.Data, time.Now().Unix()))
 		case "pong":
 			// 只是存活信号，deadline 上面已经刷新
 		case "cursor":
@@ -164,6 +166,58 @@ func (e *Engine) wsReadPump(ctx context.Context, ws *websocket.Conn, c *conn) {
 			c.grpCur.Store(d.GroupID)
 		}
 	}
+}
+
+// pongFrame 构造对客户端 ping 的回应：
+// `{"type":"pong","data":{"t":<客户端 t，缺省用服务器时间>,"server_time":<unix 秒>}}`。
+//
+// t 从顶层字段取（`{"type":"ping","t":123}`），取不到再试 data.t（契约形态），
+// 都没有或不是整数就用服务器当前秒 —— 客户端拿它的 t 算 RTT，缺了会一直算不出延迟。
+func pongFrame(topT json.RawMessage, data json.RawMessage, now int64) []byte {
+	t := now
+	if v := jsonInt(topT); v != nil {
+		t = *v
+	} else if v := jsonInt(jsonField(data, "t")); v != nil {
+		t = *v
+	}
+	return phpjson.Marshal(phpjson.New().
+		Set("type", "pong").
+		Set("data", phpjson.New().
+			Set("t", t).
+			Set("server_time", now)))
+}
+
+// jsonField 取 data 对象里某个键的原始 JSON（data 为空、不是对象或没有该键时返回 nil）。
+func jsonField(data json.RawMessage, key string) json.RawMessage {
+	if len(data) == 0 {
+		return nil
+	}
+	var m map[string]json.RawMessage
+	if json.Unmarshal(data, &m) != nil {
+		return nil
+	}
+	return m[key]
+}
+
+// jsonInt 把一段 JSON 解析成整数：`12345` 与 `12345.0` 都接受，
+// 其它形态（字符串、true、对象…）返回 nil —— 让调用方回落到服务器时间。
+func jsonInt(raw json.RawMessage) *int64 {
+	if len(raw) == 0 {
+		return nil
+	}
+	var n json.Number
+	if json.Unmarshal(raw, &n) != nil {
+		return nil
+	}
+	if v, err := n.Int64(); err == nil {
+		return &v
+	}
+	f, err := n.Float64()
+	if err != nil {
+		return nil
+	}
+	v := int64(f)
+	return &v
 }
 
 // wsWrite 带 10 秒写超时的单帧发送（只有写 goroutine 会调用）。

@@ -25,9 +25,9 @@ internal/httpapi/router.go  分发：原生优先，否则透传
 internal/httpapi/native_health.go
 internal/httpapi/native_version.go
 internal/httpapi/phpfpm.go  gofast FastCGI 客户端（每次请求一条连接 + 每次 Write 后 Flush）
-internal/realtime/hub.go    连接注册表 + 1 秒轮询（阶段 3/4 换成 Redis Pub/Sub 的替换点）
-internal/realtime/sse.go    原生 SSE
-internal/realtime/ws.go     原生 WebSocket
+internal/realtime/hub.go    连接注册表 + 1 秒轮询（SSE 自循环 + WS 全局轮询泵/环缓；阶段 3/4 换成 Redis Pub/Sub 的替换点）
+internal/realtime/sse.go    原生 SSE（自己查库、同步写响应体，逐字对齐 PHP）
+internal/realtime/ws.go     原生 WebSocket（事件由 hub 的全局轮询泵投递到 conn.send）
 internal/realtime/engine.go 引擎装配
 internal/phpjson/           **PHP 兼容 JSON 编码器**（见下）
 deploy/                     systemd 单元 / nginx 片段 / 幂等安装脚本
