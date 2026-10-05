@@ -12,7 +12,10 @@
       <span class="muted">共 {{ list.length }} 个群组</span>
     </div>
 
-    <!-- 服务端尚未部署 all_muted 字段时明确提示, 避免开关点了没反应却看不出来 -->
+    <!-- 服务端尚未部署 member_count / all_muted 字段时明确提示, 避免点了没反应却看不出来 -->
+    <div v-if="!memberCountSupported" class="allmute-warn">
+      当前服务端未返回「成员数」(member_count) 字段, 该列暂时显示 0, 需等服务端部署完成后生效。
+    </div>
     <div v-if="!allMuteSupported" class="allmute-warn">
       当前服务端未返回「全体禁言」(all_muted) 字段, 该功能暂不可用, 需等服务端部署完成后生效。
     </div>
@@ -50,6 +53,10 @@
               <span class="m-card-value">{{ record.message_count ?? 0 }}</span>
             </div>
             <div class="m-card-row">
+              <span class="m-card-label">成员数</span>
+              <span class="m-card-value">{{ record.member_count ?? 0 }}</span>
+            </div>
+            <div class="m-card-row">
               <span class="m-card-label">全体禁言</span>
               <span class="m-card-value">
                 <a-switch
@@ -70,6 +77,7 @@
             </div>
 
             <div class="m-card-actions">
+              <a-button type="text" size="small" @click="openMembers(record)">成员</a-button>
               <a-button type="text" size="small" @click="openGroup(record)">编辑</a-button>
               <a-button
                 type="text"
@@ -88,7 +96,7 @@
     </template>
 
     <!-- ============ 桌面端: 表格 ============ -->
-    <!-- 横向总宽: 70+140+110+240+80+90+100+110+180+200 = 1320 -->
+    <!-- 横向总宽: 70+140+110+240+80+90+90+100+110+180+250 = 1460 -->
     <a-table v-else :data="list" :loading="loading" row-key="id" size="small" :scroll="scrollX">
       <template #columns>
         <a-table-column title="ID" data-index="id" :width="70" />
@@ -117,6 +125,10 @@
           <template #cell="{ record }">{{ record.message_count ?? 0 }}</template>
         </a-table-column>
 
+        <a-table-column title="成员数" :width="90">
+          <template #cell="{ record }">{{ record.member_count ?? 0 }}</template>
+        </a-table-column>
+
         <a-table-column title="状态" :width="100">
           <template #cell="{ record }">
             <a-tag :color="Number(record.is_active) ? 'green' : 'gray'">
@@ -143,9 +155,10 @@
 
         <a-table-column title="创建时间" data-index="created_at" :width="180" />
 
-        <a-table-column title="操作" :width="200" fixed="right">
+        <a-table-column title="操作" :width="250" fixed="right">
           <template #cell="{ record }">
             <a-space>
+              <a-button type="text" size="small" @click="openMembers(record)">成员</a-button>
               <a-button type="text" size="small" @click="openGroup(record)">编辑</a-button>
               <a-button
                 type="text"
@@ -246,17 +259,84 @@
         <div class="form-tip">停用后 App 端社交页不再展示该群组, 但已有群消息保留。</div>
       </a-form>
     </a-modal>
+
+    <!-- ===== 群成员抽屉 (admin_group_members: 关键词 + 分页) ===== -->
+    <a-drawer
+      v-model:visible="showMembers"
+      :width="memberDrawerWidth"
+      :footer="false"
+      unmount-on-close
+    >
+      <template #title>
+        <div class="drawer-title">
+          <span>{{ memberTitle }}</span>
+          <span class="muted">共 {{ memberTotal }} 名成员</span>
+        </div>
+      </template>
+
+      <div class="drawer-toolbar">
+        <a-input
+          v-model="memberKw"
+          placeholder="搜索昵称 / 用户名"
+          allow-clear
+          @press-enter="searchMembers"
+        >
+          <template #prefix><icon-search /></template>
+        </a-input>
+        <a-button :loading="memberLoading" @click="searchMembers">搜索</a-button>
+        <a-button :loading="memberLoading" @click="loadMembers">
+          <template #icon><icon-refresh /></template>刷新
+        </a-button>
+      </div>
+
+      <a-spin :loading="memberLoading" style="width: 100%">
+        <div class="member-list">
+          <div v-for="m in memberList" :key="m.id" class="member-item">
+            <a-avatar v-if="m.avatar" :size="40" :image-url="m.avatar" />
+            <a-avatar v-else :size="40">{{ memberInitial(m) }}</a-avatar>
+            <div class="member-main">
+              <div class="member-line">
+                <span class="member-name">{{ m.nickname || m.username || ('用户 ' + m.id) }}</span>
+                <a-tag v-if="memberRole(m) === 'owner'" size="small" color="orangered">群主</a-tag>
+                <a-tag v-else-if="memberRole(m) === 'admin'" size="small" color="arcoblue">管理员</a-tag>
+                <a-tag v-else size="small" color="gray">成员</a-tag>
+                <span v-for="tg in memberTags(m)" :key="'tag-' + tg" class="tag-chip">{{ tg }}</span>
+              </div>
+              <div class="member-sub">
+                <span class="muted">@{{ m.username || ('用户 ' + m.id) }}</span>
+                <span class="muted">加入时间: {{ m.joined_at || '-' }}</span>
+              </div>
+            </div>
+            <a-button type="text" size="small" status="danger" @click="removeMember(m)">移出群聊</a-button>
+          </div>
+        </div>
+      </a-spin>
+      <a-empty v-if="!memberLoading && !memberList.length" description="暂无成员" />
+      <a-pagination
+        v-if="memberTotal > 0"
+        v-model:current="memberPagination.current"
+        v-model:page-size="memberPagination.pageSize"
+        :total="memberTotal"
+        :show-total="true"
+        :show-page-size="true"
+        :page-size-options="memberPagination.pageSizeOptions"
+        size="small"
+        class="m-pager"
+        @change="onMemberPageChange"
+        @page-size-change="onMemberPageSizeChange"
+      />
+    </a-drawer>
   </a-card>
 </template>
 
 <script setup>
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { Message, Modal } from '@arco-design/web-vue'
 import { api, apiForm, pickList } from '../api'
 import { isMobile, modalWidth, tableScroll } from '../composables/useResponsive'
 
-// 表格横向滚动: 桌面按列宽总和 1210, 手机端至少 720
-const scrollX = tableScroll(1320)
+// 表格横向滚动: 桌面按列宽总和 1460, 手机端至少 720
+const scrollX = tableScroll(1460)
 
 const list = ref([])
 const loading = ref(false)
@@ -265,6 +345,7 @@ const showGroup = ref(false)
 // 行内开关正在保存的群 id (0 = 空闲); 服务端是否已返回 all_muted 字段
 const allMuteBusyId = ref(0)
 const allMuteSupported = ref(true)
+const memberCountSupported = ref(true)
 
 // 群组头像上传: 选中文件后本地预览, 保存时作为 icon_file 一起提交
 const iconInputRef = ref(null)
@@ -295,6 +376,7 @@ async function load() {
     // 服务端未部署 all_muted 时该字段整体缺失: 按「未开启」显示 + 禁用开关, 不做静默失败
     if (list.value.length) {
       allMuteSupported.value = list.value.some((g) => Object.prototype.hasOwnProperty.call(g, 'all_muted'))
+      memberCountSupported.value = list.value.some((g) => Object.prototype.hasOwnProperty.call(g, 'member_count'))
     }
   } finally {
     loading.value = false
@@ -516,6 +598,135 @@ function delGroup(record) {
   })
 }
 
+// ===================== 群成员抽屉 =====================
+// 接口: admin_group_members (group_id/keyword/page/page_size) / admin_group_member_remove (group_id/user_id)
+const showMembers = ref(false)
+const memberGroup = ref(null)
+const memberList = ref([])
+const memberTotal = ref(0)
+const memberKw = ref('')
+const memberLoading = ref(false)
+const memberPagination = ref({
+  current: 1,
+  pageSize: 20,
+  pageSizeOptions: [10, 20, 50],
+})
+
+/** 抽屉宽度: 手机近全屏, 桌面 720px */
+const memberDrawerWidth = computed(() => (isMobile.value ? '94vw' : '720px'))
+
+/** 抽屉标题: 群名 (群组对象缺失时兜底) */
+const memberTitle = computed(() => {
+  const g = memberGroup.value
+  return g ? (g.name || '未命名群组') : '群成员'
+})
+
+/** 头像兜底: 昵称 > 用户名 > ? 的首字 */
+function memberInitial(m) {
+  const s = String((m && (m.nickname || m.username)) || '?')
+  return s.slice(0, 1).toUpperCase()
+}
+
+/** 角色: 服务端只返回 owner / admin / member, 其它值一律按 member 显示 */
+function memberRole(m) {
+  const r = String((m && m.role) || 'member')
+  return r === 'owner' || r === 'admin' ? r : 'member'
+}
+
+/** 标签: user_brief 的 tags 是字符串数组, 缺字段/类型异常时按空数组处理 */
+function memberTags(m) {
+  const t = m && m.tags
+  if (!Array.isArray(t)) return []
+  return t.map((x) => String(x).trim()).filter((x) => x !== '')
+}
+
+/** 打开成员抽屉: 重置搜索与分页后立即拉第一页 */
+function openMembers(record) {
+  memberGroup.value = record || null
+  memberKw.value = ''
+  memberPagination.value.current = 1
+  showMembers.value = true
+  loadMembers()
+}
+
+async function loadMembers() {
+  const gid = Number(memberGroup.value && memberGroup.value.id) || 0
+  if (!gid) return
+  memberLoading.value = true
+  try {
+    const params = {
+      group_id: gid,
+      page: memberPagination.value.current,
+      page_size: memberPagination.value.pageSize,
+    }
+    if (memberKw.value.trim()) params.keyword = memberKw.value.trim()
+    const r = await api('admin_group_members', params)
+    if (r.code !== 0) {
+      memberList.value = []
+      memberTotal.value = 0
+      if (r.code !== 401) Message.error(r.msg || '成员加载失败')
+      return
+    }
+    const d = r.data || {}
+    memberList.value = Array.isArray(d.list) ? d.list : []
+    memberTotal.value = Number(d.total) || 0
+    if (d.page) memberPagination.value.current = Number(d.page)
+    if (d.page_size) memberPagination.value.pageSize = Number(d.page_size)
+  } finally {
+    memberLoading.value = false
+  }
+}
+
+/** 搜索: 回到第一页 */
+function searchMembers() {
+  memberPagination.value.current = 1
+  loadMembers()
+}
+
+function onMemberPageChange(current) {
+  memberPagination.value.current = current
+  loadMembers()
+}
+function onMemberPageSizeChange(pageSize) {
+  memberPagination.value.pageSize = pageSize
+  memberPagination.value.current = 1
+  loadMembers()
+}
+
+/**
+ * 移出群聊: 二次确认 -> admin_group_member_remove -> 刷新成员列表 + 群列表(成员数)。
+ * 只调新接口, 不碰 admin_group_save, 避免误改群资料字段。
+ */
+function removeMember(m) {
+  const gid = Number(memberGroup.value && memberGroup.value.id) || 0
+  const uid = Number(m && m.id) || 0
+  if (!gid || !uid) return
+  const name = String((m && (m.nickname || m.username)) || ('用户 ' + uid))
+  Modal.warning({
+    title: '确认将该成员移出群聊?',
+    content: `群组「${memberTitle.value}」将移出成员 ${name} (@${(m && m.username) || uid})，移出后该成员需重新加入才能发言。`,
+    okText: '移出',
+    cancelText: '取消',
+    hideCancel: false,
+    okButtonProps: { status: 'danger' },
+    onOk: async () => {
+      const r = await api('admin_group_member_remove', { group_id: gid, user_id: uid }, 'POST')
+      if (r.code !== 0) {
+        if (r.code !== 401) Message.error('移出失败: ' + (r.msg || '未知错误'))
+        return false
+      }
+      Message.success('已移出群聊')
+      // 删掉当前页最后一条时回退一页
+      if (memberList.value.length === 1 && memberPagination.value.current > 1) {
+        memberPagination.value.current--
+      }
+      await loadMembers()
+      await load() // 刷新群列表, 让「成员数」立即更新
+      return true
+    },
+  })
+}
+
 onMounted(load)
 </script>
 
@@ -595,6 +806,40 @@ onMounted(load)
   color: var(--color-text-3);
   font-weight: 600;
 }
+
+/* ===== 群成员抽屉 ===== */
+.drawer-title { display: flex; align-items: baseline; gap: 10px; }
+.drawer-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+.member-list { display: flex; flex-direction: column; }
+.member-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 4px;
+  border-bottom: 1px solid var(--color-border-1, #e5e6eb);
+}
+.member-main { flex: 1 1 auto; min-width: 0; }
+.member-line { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; line-height: 1.7; }
+.member-name { font-weight: 600; }
+.member-sub { display: flex; gap: 14px; flex-wrap: wrap; }
+.member-sub .muted { font-size: 12px; }
+/* 用户标签 chip: 对应服务端 user_brief 的 tags */
+.tag-chip {
+  display: inline-block;
+  padding: 0 6px;
+  border-radius: 4px;
+  background: var(--color-fill-2);
+  color: var(--color-text-2);
+  font-size: 12px;
+  line-height: 18px;
+}
+.m-pager { justify-content: flex-end; margin-top: 12px; }
 
 @media (max-width: 820px) {
   .page-toolbar {

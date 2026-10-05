@@ -38,7 +38,8 @@
             <div class="m-card-head">
               <div class="m-card-title">
                 {{ senderName(record) }}
-                <a-tag v-if="hasAt(record)" size="small" color="orangered">含 @</a-tag>
+                <a-tag v-if="isSystem(record)" size="small" color="gray">系统</a-tag>
+                <a-tag v-else-if="hasAt(record)" size="small" color="orangered">含 @</a-tag>
                 <a-tag v-if="Number(record.is_recalled)" size="small" color="gray">已撤回</a-tag>
               </div>
             </div>
@@ -51,6 +52,7 @@
               <span class="m-card-label">内容</span>
               <span class="m-card-value">
                 <span v-if="Number(record.is_recalled)" class="recalled">已撤回</span>
+                <span v-else-if="isSystem(record)" class="sys-text">{{ record.content || '[系统消息]' }}</span>
                 <span v-else class="msg-content">{{ record.content || (record.image ? '[图片]' : '-') }}</span>
               </span>
             </div>
@@ -107,14 +109,21 @@
         <a-table-column title="发送人" :width="180">
           <template #cell="{ record }">
             <div class="sender">
-              <span class="sender-name">{{ record.nickname || '未设置昵称' }}</span>
-              <span class="muted">@{{ record.username || ('用户' + record.user_id) }}</span>
+              <template v-if="isSystem(record)">
+                <span class="sender-name sys-text">{{ record.nickname || '系统' }}</span>
+                <span><a-tag size="small" color="gray">系统</a-tag></span>
+              </template>
+              <template v-else>
+                <span class="sender-name">{{ record.nickname || '未设置昵称' }}</span>
+                <span class="muted">@{{ record.username || ('用户' + record.user_id) }}</span>
+              </template>
             </div>
           </template>
         </a-table-column>
         <a-table-column title="内容" :width="330">
           <template #cell="{ record }">
             <span v-if="Number(record.is_recalled)" class="recalled">已撤回</span>
+            <span v-else-if="isSystem(record)" class="sys-text">{{ record.content || '[系统消息]' }}</span>
             <span v-else class="msg-content">{{ record.content || (record.image ? '[图片]' : '-') }}</span>
           </template>
         </a-table-column>
@@ -221,6 +230,16 @@ function senderName(record) {
   if (nick) return nick
   if (user) return `@${user}`
   return `用户 ${record.user_id || ''}`
+}
+
+/**
+ * 是否系统消息: 服务端 social_messages 每条带 msg_type ('' / 'text' = 普通, 'system' = 系统)。
+ * 老服务端没有该字段时, 用「加入了群聊 / 退出了群聊」文案兜底。
+ */
+function isSystem(record) {
+  if (String((record && record.msg_type) || '') === 'system') return true
+  const c = String((record && record.content) || '')
+  return /加入了群聊$|退出了群聊$/.test(c)
 }
 
 /** 是否含 @: at_users 为逗号分隔 id 串或 JSON 数组, 空串 / '[]' / '0' 视为没有 */
@@ -360,6 +379,8 @@ onMounted(() => {
 .sender-name { font-weight: 600; }
 /* 撤回的消息统一灰色显示 */
 .recalled { color: var(--color-text-3); font-size: 13px; }
+/* 系统消息 (msg_type = 'system'): 灰字, 与普通消息区分 */
+.sys-text { color: var(--color-text-3); font-size: 13px; }
 .msg-content { word-break: break-word; }
 /* 一键清除确认弹窗 */
 .clear-warn { margin-bottom: 12px; font-size: 13px; line-height: 1.9; color: var(--color-text-2); }
