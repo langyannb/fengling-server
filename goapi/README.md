@@ -1,16 +1,19 @@
-# goapi —— 风铃分享库 Go 网关（阶段 0 + 阶段 1）
+# goapi —— 风铃分享库 Go 网关（阶段 0 → 阶段 6）
 
-监听 `127.0.0.1:9100`，**原生**接管 4 个入口，其余全部 action **原样透传**给现有 PHP：
+监听 `127.0.0.1:9100`，**`api.php` 的 127 个 action 全部 Go 原生**接管
+（外加 `health` 与 `POST /ws` 两个 PHP 没有的新能力）。
+透传分支仍然保留，由 `PHP_FALLBACK` 开关控制（见「阶段 6」章节）。
 
 | 入口 | 处理方式 |
 | --- | --- |
 | `?action=health` | Go 原生（新增能力，PHP 没有） |
 | `?action=version` | Go 原生（与 PHP 逐字节一致） |
 | `?action=stream` | Go 原生 SSE（逐字节对齐 `api.php:3648 sse_run()`） |
-| `POST /ws`（`location = /ws`） | Go 原生 WebSocket（新增能力） |
-| `?action=user_avatar` / `social_image_upload` / `social_video_upload` / `upload` / `upload_apk` / `video_config` | Go 原生（阶段 1，见下文「阶段 1」章节） |
-| `GET /healthz` | Go 原生（阶段 1，仅本机可达） |
-| 其它任意 action | 透传 PHP-FPM（`unix:/tmp/php-cgi-85.sock`），状态码/响应头/响应体逐字透传、流式不缓冲 |
+| `POST /ws`（`location = /ws`） | Go 原生 WebSocket（新增能力，SSE 仍保留做兼容） |
+| `api.php` 的全部业务 action | Go 原生（阶段 1–6 逐步接管，逐字对齐契约） |
+| `GET /healthz` | Go 原生（仅本机可达） |
+| `PHP_FALLBACK=1` 时的未知 action | 透传 PHP-FPM（`unix:/tmp/php-cgi-85.sock`），状态码/响应头/响应体逐字透传、流式不缓冲 |
+| `PHP_FALLBACK=0` 时的未知 action | 完全不连 fpm，逐字回 PHP 的「未知操作」404 |
 
 目标只有一条：**客户端零改动**。
 
@@ -79,6 +82,7 @@ tools/goapi_diff.sh         双跑逐字对比
 | `UPLOAD_TMP_DIR` | 空 = `os.TempDir()` | 上传临时目录（`/tmp`，`PrivateTmp=no`） |
 | `UPLOAD_RATE_LIMIT` / `UPLOAD_RATE_WINDOW` | `30` / `10m` | 每人每窗口上传次数（0 = 关闭；Redis 挂 fail-open） |
 | `VIDEO_CLEANUP_INITIAL` / `VIDEO_CLEANUP_INTERVAL` | `30s` / `10m` | 视频清理 ticker 首次延迟与周期 |
+| `PHP_FALLBACK` | `1` | **阶段 6 总开关**：`1`=未原生 action 透传 PHP-FPM；`0`=完全不连 fpm，未知 action 逐字回 404 |
 
 **启动即校验**：`GOAPI_ADDR`/`DB_NAME`/`DB_USER`/`DB_PASS`/`REDIS_ADDR`/`S3_*` 缺失，或
 `DB_SOCKET` 与 `DB_HOST` 同时为空，都会让 goapi **拒绝启动**（契约第 5 节：不许带默认值跑到线上）。
@@ -316,13 +320,89 @@ sudo ./deploy/install.sh --rollback
 回滚后**全站立刻回到纯 PHP**（主 vhost 的 `location ~ \.php$` 重新接管 `/api.php`）；
 二进制与 env 保留，便于再次切换。手工回滚同理：删片段 + `nginx -t && /etc/init.d/nginx reload`。
 
+## 阶段 6：退休 PHP（`PHP_FALLBACK` 开关）
+
+**当前状态：127 / 127 个 action 全部 Go 原生**，`/api.php` 的每个业务 action 都不再经过 PHP-FPM。
+
+### 开关语义
+
+| `PHP_FALLBACK` | `default:` 分支行为 | 何时用 |
+| --- | --- | --- |
+| `1`（默认） | 未注册的 action 透传给 PHP-FPM | 迁移期兜底；fpm 必须活着 |
+| `0` | 完全不连 fpm，逐字回 PHP 的「未知操作」404 | PHP 退休后；fpm 可以停掉 |
+
+- 代码位置：`internal/httpapi/router.go` 的 `default:` 分支；
+- 配置：`internal/config/config.go` 的 `PHPFallback`（`getBool`，`0/false/no/off` 为假）；
+- 这是**唯一**开关，回滚只需改这一行 + 重启服务。
+
+### 已验证的事实
+
+- `api.php` 的 127 个 `case '...'` 在 `router.go` 里**全部**有对应原生 case，逐个 `grep` 比对过，
+  不存在会落到 `default` 的业务 action（`comm -23 php-actions.txt go-actions.txt` 为空）。
+- Go 侧的 `case "health"` 是 PHP 没有的 action（监控/探活用），双跑脚本对它只做 Go 侧自检。
+
+### 切换步骤（服务器）
+
+```bash
+# ① 确认线上二进制已含阶段 6 代码
+curl -sS 'http://127.0.0.1:9100/api.php?action=health'
+
+# ② 关透传：只改 env 一行 + 重启 goapi，**不动任何 PHP 进程**
+sudo ./deploy/install.sh --retire-php
+#   脚本会用 action=__goapi_probe__ 探测谁在应答：
+#   返回「未知操作」= goapi 自己回的 = 透传确实关了
+
+# ③ 双跑验收（此时 PHP 对照端点还活着，这一步最有价值）
+TOKEN=<管理员 token> ./tools/goapi_diff.sh
+
+# ④ 真机走一遍：首页 / 分类 / 详情 / 登录 / 私聊 / 群聊 / 抽奖 / 后台各页
+
+# ⑤ 停 PHP-FPM（宝塔面板「软件商店 → PHP-85 → 停止」或 systemctl stop php-fpm-85）
+
+# ⑥ 停完再验一次
+curl -sS 'http://127.0.0.1/api.php?action=version'  # 必须仍 200 + JSON
+curl -sS 'http://127.0.0.1/api.php?action=no_such'  # 必须 404 未知操作（不是 502）
+```
+
+### 回滚（一分钟回到原样）
+
+```bash
+sudo ./deploy/install.sh --restore-php   # PHP_FALLBACK=1，透传立刻回来
+sudo systemctl start php-fpm-85          # 若已停过 fpm，必须启动
+```
+
+整站回纯 PHP（不依赖 goapi）：`sudo ./deploy/install.sh --rollback`（删 nginx 片段 + 停服务），
+再启动 PHP-FPM。
+
+### 为什么 `api.php` 文件还留着
+
+- 它是**唯一契约参考实现**，任何逐字对齐争议都以它为准；
+- 留着但不加载 = 零成本：nginx 的 `location = /api.php` 已被 goapi.conf 精确匹配抢走，
+  fpm 停掉后它就是一坨静态字节；
+- 删除不可回滚，不放进任何自动化脚本。
+
+### 阶段 6 新增的已知差异
+
+- `action=health` 为 Go 新增（PHP 侧是「未知操作」404），只给监控/负载均衡用。
+- `uc_import` 写对象存储时的 key 后缀用**入参扩展名**（PHP 原文如此：webp 被压成 png 内容
+  也仍然叫 `.webp`），Go 照抄，保证返回的 url 与 PHP 逐字一致。
+- `uc.php` / `apk.php` / `arsc.php` 已完整移植为 `internal/uc`、`internal/apk`，
+  PHP 文件保留作参考实现。
+- 6 个破坏性抽奖 action（`prize_delete` / `codes_import` / `codes_delete` /
+  `quota_reset_all` / `activity_reset` / `quota_all`）是原生实现，但**永远不进双跑脚本**，
+  只在后台面板由人手工点；handler 顶部有 `⚠️ 破坏性操作` 注释。
+
 ## 双跑逐字对比
 
 ```bash
 # PHP 基准 = 127.0.0.1:9101 (纯 PHP 对照端点), Go = 127.0.0.1:9100
-./tools/goapi_diff.sh
-TOKEN=<登录 token> ./tools/goapi_diff.sh --only version,apps,stream
+./tools/goapi_diff.sh                       # 只跑公开只读 action
+TOKEN=<管理员 token> ./tools/goapi_diff.sh  # 额外覆盖需登录/管理员的只读 action
+TOKEN=<token> ./tools/goapi_diff.sh --only version,apps,stream
 ```
+
+鉴权走 `Authorization: Bearer <token>`（与 `api.php` 的 `current_user()` 一致）；
+脚本里**不能**用 `&token=` 查询参数 —— PHP 侧只认请求头。
 
 对比每个 action 的状态码 / 响应头 / 响应体（字节级 `cmp`）以及 SSE 前 2 秒输出，
 并额外验证 gzip 路径（两侧都压缩且解压后一致）。默认只跑无副作用的只读 action，
@@ -342,8 +422,11 @@ file "$HOME/goapi-linux-amd64"   # ELF 64-bit LSB executable, x86-64, statically
 
 ## 已知限制与风险
 
-- **未与真实 PHP 双跑对比过**：本机无 PHP、无 Redis、无 MySQL，所有验证都是本地编译 + 单测；
-  `tools/goapi_diff.sh` 与线上的 38 用例双跑由主 agent 在服务器上执行。
+- **本机不能替线上验收**：开发机没有 PHP、MySQL、Redis、S3，验证只有编译 + 单测。
+  线上逐字一致靠 `tools/goapi_diff.sh` 双跑（公开 10 例 + 需登录 22 例，`PHP_FALLBACK=0`
+  之后还要再跑一次，那才是「脱离 PHP 仍然一致」的证据）。
+- **UC 网盘的下载 → 压缩 → 传 S3 链路未在本机覆盖**：`internal/uc` 的 52 个用例全用假 UC 服务，
+  `uc_import` 的单测只到「未登录 / kind=none / 上游错误映射」，真实导入必须在服务器上点一次。
 - gzip 的 deflate 流不保证与 zlib 逐字节相同（解压后一致）；gzip 头已对齐。
 - 响应头**顺序**由 Go/nginx 决定（Go 的 `http.Header` 是 map），逐字一致的判定按「同名头取值」比较。
 - `db_has_column` 的结果在 Go 里是**进程级**缓存（PHP 是每请求），跑完 `video` 列迁移需重启 goapi。

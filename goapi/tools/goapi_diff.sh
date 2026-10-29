@@ -6,12 +6,14 @@
 #                 (9845 切换后就是 Go 了，用它当基准会变成"自己跟自己比")
 #
 # 用法:
-#   ./goapi_diff.sh                      # 跑默认清单
+#   ./goapi_diff.sh                      # 跑默认清单(公开只读, 不需要 token)
 #   ./goapi_diff.sh --only version,apps  # 只跑指定 action
-#   TOKEN=xxx ./goapi_diff.sh            # 带上鉴权 token(需要登录的只读接口)
+#   TOKEN=xxx ./goapi_diff.sh            # 额外跑「需要登录」的只读 action
 #   STREAM_SECONDS=3 ./goapi_diff.sh     # SSE 采样窗口(默认 2 秒)
 #
-# 只读 action 清单刻意不含任何写库/扣抽奖次数的接口。
+# 鉴权走 `Authorization: Bearer <token>`, 与 api.php 的 current_user() 一致
+# (**不是** &token= 查询参数, PHP 侧不认那种写法)。
+# 只读 action 清单刻意不含任何写库 / 扣抽奖次数 / 新增删除的接口。
 set -uo pipefail
 
 GO_BASE="${GO_BASE:-http://127.0.0.1:9100}"
@@ -22,18 +24,46 @@ UPLOAD_CASES="${UPLOAD_CASES:-0}"   # 1 = 额外跑阶段 1 的上传类 action�
 ONLY="${ONLY:-}"
 WORK="${WORK:-${TMPDIR:-/tmp}/goapi-diff}"
 
-# action|额外查询串   (全部只读: version/health 是原生, 其余透传 PHP)
+# action|额外查询串|need_token     need_token=1 表示没有 TOKEN 时跳过
+# 全部只读: 只调 SELECT / 只读缓存, 不写库、不扣抽奖次数、不新增删除任何行。
+# ⚠️ 破坏性 action(admin_lottery_*_reset / *_delete / *_import / quota_all / uc_import …)
+#    **永远不进这张表** —— 它们只在后台面板由人手工点。
 ACTIONS=(
-  "version|"
-  "health|"
-  "banners|"
-  "categories|"
-  "apps|"
-  "app_detail|id=1"
-  "contributors|"
-  "about_config_get|"
-  "notice_get|"
-  "stream|pm_id=0&group_id=0"
+  # ---- 公开只读(不需要 token) ----
+  "version||0"
+  "banners||0"
+  "categories||0"
+  "apps||0"
+  "app_detail|id=1|0"
+  "contributors||0"
+  "contributor_apps|id=1|0"
+  "about_config_get||0"
+  "notice_get||0"
+  "stats||0"
+  # ---- 普通用户只读(需要登录 token) ----
+  "user_me||1"
+  "pm_conversations||1"
+  "notifications||1"
+  "social_groups||1"
+  "lottery_info||1"
+  "lottery_records||1"
+  "stream|pm_id=0&group_id=0|1"
+  # ---- 管理员只读(需要管理员 token) ----
+  "admin_users||1"
+  "admin_groups||1"
+  "admin_social_messages||1"
+  "admin_notification_list||1"
+  "admin_lottery_prizes||1"
+  "admin_lottery_codes||1"
+  "admin_lottery_draws||1"
+  "admin_lottery_config_get||1"
+  "admin_video_config_get||1"
+  "admin_video_usage||1"
+  "admin_pm_conversations||1"
+  "admin_tags||1"
+  "crash_reports||1"
+  "harm_reports||1"
+  "uc_status||1"
 )
 
 # 这些头一律不比较(传输层/易变/后端身份), 缺了会误报
@@ -41,6 +71,7 @@ IGNORE_HDR='^(date|server|connection|keep-alive|transfer-encoding|content-length
 
 pass=0
 fail=0
+skip=0
 
 rm -rf "$WORK"; mkdir -p "$WORK"
 
@@ -53,8 +84,11 @@ fetch() {
   local base="$1" action="$2" q="$3" prefix="$4" url code
   url="${base}/api.php?action=${action}"
   [ -n "$q" ] && url="${url}&${q}"
-  [ -n "$TOKEN" ] && url="${url}&token=${TOKEN}"
-  code="$(curl -sS --max-time 20 -H 'Accept-Encoding: identity' \
+  # 鉴权头: 与 api.php 的 current_user() 一致(Authorization: Bearer),
+  # 公开 action 带上也不影响(PHP 只是读一下用户, 不强制)。
+  local auth=()
+  [ -n "$TOKEN" ] && auth=(-H "Authorization: Bearer ${TOKEN}")
+  code="$(curl -sS --max-time 20 -H 'Accept-Encoding: identity' "${auth[@]+"${auth[@]}"}" \
             -D "${prefix}.hdr" -o "${prefix}.body" -w '%{http_code}' "$url" 2>"${prefix}.err")" || code=000
   printf '%s' "$code" > "${prefix}.code"
 }
@@ -76,10 +110,12 @@ diff_case() {
 
   if [ "$action" = "stream" ]; then
     # SSE: 采样 STREAM_SECONDS 秒, 按行比对(事件流是逐行协议)
-    timeout "$STREAM_SECONDS" curl -sS -N -H 'Accept-Encoding: identity' \
-      "${GO_BASE}/api.php?action=stream&${q}${TOKEN:+&token=$TOKEN}" > "$WORK/go.stream" 2>"$WORK/go.stream.err"
-    timeout "$STREAM_SECONDS" curl -sS -N -H 'Accept-Encoding: identity' \
-      "${PHP_BASE}/api.php?action=stream&${q}${TOKEN:+&token=$TOKEN}" > "$WORK/php.stream" 2>"$WORK/php.stream.err"
+    local sauth=()
+    [ -n "$TOKEN" ] && sauth=(-H "Authorization: Bearer ${TOKEN}")
+    timeout "$STREAM_SECONDS" curl -sS -N -H 'Accept-Encoding: identity' "${sauth[@]+"${sauth[@]}"}" \
+      "${GO_BASE}/api.php?action=stream&${q}" > "$WORK/go.stream" 2>"$WORK/go.stream.err"
+    timeout "$STREAM_SECONDS" curl -sS -N -H 'Accept-Encoding: identity' "${sauth[@]+"${sauth[@]}"}" \
+      "${PHP_BASE}/api.php?action=stream&${q}" > "$WORK/php.stream" 2>"$WORK/php.stream.err"
     if cmp -s "$WORK/go.stream" "$WORK/php.stream"; then
       ok "SSE 前 ${STREAM_SECONDS}s 逐字一致 ($(body_stat "$WORK/go.stream"))"
       pass=$((pass+1))
@@ -284,11 +320,48 @@ say "Go  : $GO_BASE   (被测)"
 say "PHP : $PHP_BASE  (基准, 纯 PHP 对照端点)"
 say "工作目录: $WORK"
 say "只读清单: ${#ACTIONS[@]} 个 action (无写库/无扣抽奖次数)"
+if [ -z "$TOKEN" ]; then
+  say "TOKEN 未设置: 只跑公开只读 action, 需要登录的会被跳过"
+else
+  say "TOKEN 已设置: 额外覆盖需要登录/管理员权限的只读 action"
+fi
+
+# Go 独有的 action: PHP 侧根本没有, 只能自检 Go 侧(不能拿来对比)。
+check_go_only() {
+  say ""
+  say "=== action=health（Go 独有）==="
+  local code
+  code="$(curl -sS --max-time 20 -o "$WORK/health.body" -w '%{http_code}' \
+            "${GO_BASE}/api.php?action=health" 2>/dev/null || echo 000)"
+  local body; body="$(head -c 200 "$WORK/health.body" 2>/dev/null)"
+  if [ "$code" = "200" ]; then
+    ok "Go 返回 200: $body"
+    pass=$((pass+1))
+  else
+    bad "Go 返回 $code: $body"
+    say "     (PHP_FALLBACK=0 时这不影响任何客户端, 但如果这里是 404 说明二进制是旧版)"
+    fail=$((fail+1))
+  fi
+  say "  说明: api.php 没有 health 这个 action(PHP 侧会回「未知操作」404), 因此不参与双跑对比。"
+}
 
 for item in "${ACTIONS[@]}"; do
-  a="${item%%|*}"; q="${item#*|}"
-  selected "$a" && diff_case "$a" "$q"
+  a="${item%%|*}"
+  rest="${item#*|}"
+  q="${rest%%|*}"
+  nt="${rest##*|}"
+  selected "$a" || continue
+  if [ "$nt" = "1" ] && [ -z "$TOKEN" ]; then
+    say ""
+    say "=== ${a} ==="
+    printf '  \033[33m⏭  需要登录 token, 已跳过\033[0m  (TOKEN=<登录 token> %s)\n' "$0"
+    skip=$((skip+1))
+    continue
+  fi
+  diff_case "$a" "$q"
 done
+
+selected "health" && check_go_only
 
 if [ "$UPLOAD_CASES" = "1" ]; then
   if [ -z "$TOKEN" ]; then
@@ -306,7 +379,7 @@ fi
 
 say ""
 say "──────────────────────────────────────────"
-say "结果: 通过 $pass / 失败 $fail"
+say "结果: 通过 $pass / 失败 $fail / 跳过 $skip"
 if [ "$fail" -gt 0 ]; then
   say "差异清单见上面 ❌ 行; 原始报文在 $WORK/"
   exit 1
