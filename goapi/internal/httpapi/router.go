@@ -458,6 +458,22 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "uc_logout":
 		setCORS(w.Header())
 		rt.handleUCLogout(w, r)
+	// ---------- 阶段 6：UC 网盘其余 5 个 action ----------
+	case "uc_qr_create":
+		setCORS(w.Header())
+		rt.handleUCQRCreate(w, r)
+	case "uc_qr_poll":
+		setCORS(w.Header())
+		rt.handleUCQRPoll(w, r)
+	case "uc_cookie_set":
+		setCORS(w.Header())
+		rt.handleUCCookieSet(w, r)
+	case "uc_resolve":
+		setCORS(w.Header())
+		rt.handleUCResolve(w, r)
+	case "uc_import":
+		setCORS(w.Header())
+		rt.handleUCImport(w, r)
 	case "version_update":
 		setCORS(w.Header())
 		rt.handleVersionUpdate(w, r)

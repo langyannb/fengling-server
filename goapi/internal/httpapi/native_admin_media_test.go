@@ -83,7 +83,7 @@ func TestAdminMediaAuthFourStates(t *testing.T) {
 	}
 }
 
-// 12 个 action 无 token 一律 401 未登录（一律先鉴权）。
+// 17 个 action 无 token 一律 401 未登录（一律先鉴权）。
 func TestAdminMediaAllActionsUnauthorized(t *testing.T) {
 	f := newLotteryFake()
 	rt := newMediaRouter(f, nil, "")
@@ -91,6 +91,7 @@ func TestAdminMediaAllActionsUnauthorized(t *testing.T) {
 		"about_config_set", "notice_set", "admin_video_config_get", "admin_video_config_set",
 		"admin_video_clean", "crash_reports", "harm_reports", "harm_report_status",
 		"harm_report_delete", "uc_status", "uc_logout", "version_update",
+		"uc_qr_create", "uc_qr_poll", "uc_cookie_set", "uc_resolve", "uc_import",
 	} {
 		w := mediaCallNoToken(rt, a)
 		if w.Code != 401 || w.Body.String() != `{"code":401,"msg":"未登录","data":null}` {
