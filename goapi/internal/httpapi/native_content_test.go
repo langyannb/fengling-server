@@ -267,7 +267,7 @@ func TestContentAppDetailParentPackFalseAndAppendedKeys(t *testing.T) {
 	w := callContent(newContentRouter(f), "app_detail", `{"id":7}`, adminHdr())
 	want := `{"code":0,"msg":"ok","data":{"id":7,"category_id":1,"name":"整合包","icon":"","version":"2.0",` +
 		`"release_date":"","is_new":0,"new_until":null,"description":null,"screenshots":[],` +
-		`"contributor_qq":"","package_name":"","download_count":5,"rating":3.0,"sort_order":0,` +
+		`"contributor_qq":"","package_name":"","download_count":5,"rating":3,"sort_order":0,` +
 		`"pack_id":5,"is_top":0,"is_featured":0,"is_active":1,"created_at":"2026-01-01 00:00:00",` +
 		`"updated_at":"2026-01-02 00:00:00","category_name":"合集",` +
 		`"pan_links":[{"id":2,"pan_type":"uc","label":"UC网盘","url":"https:\/\/pan.uc\/a","password":"p"}],` +
@@ -293,7 +293,7 @@ func TestContentCategoriesNoIntCastAndOrder(t *testing.T) {
 			"icon", "https://i/x.png", "sort_order", "3", "created_at", "2026-01-01 00:00:00")}, nil
 	}
 	w := callContent(newContentRouter(f), "categories", "", nil)
-	want := `{"code":0,"msg":"ok","data":[{"id":"1","parent_id":"0","name":"工具","color":"#4C6FFF","icon":"https:\/\/i\/x.png","sort_order":"3","created_at":"2026-01-01 00:00:00"}]}`
+	want := `{"code":0,"msg":"ok","data":[{"id":"1","parent_id":"0","name":"工具","color":"#4C6FFF","sort_order":"3","created_at":"2026-01-01 00:00:00","icon":"https:\/\/i\/x.png"}]}`
 	if w.Body.String() != want {
 		t.Fatalf("categories 不做 int 强转 + 键序\n got=%s\nwant=%s", w.Body.String(), want)
 	}

@@ -50,8 +50,8 @@ func TestFloatsMatchPHP(t *testing.T) {
 		in   float64
 		want string
 	}{
-		{0, `{"v":0.0}`},
-		{12, `{"v":12.0}`},
+		{0, `{"v":0}`},
+		{12, `{"v":12}`},
 		{12.5, `{"v":12.5}`},
 		{0.1, `{"v":0.1}`},
 		{1e21, `{"v":1.0e+21}`},
@@ -66,7 +66,8 @@ func TestFloatsMatchPHP(t *testing.T) {
 }
 
 func TestFloatsDifferFromEncodingJSON(t *testing.T) {
-	// 这条是「为什么要自己写编码器」的回归断言：encoding/json 会把 12.0 输出成 12。
+	// 回归断言：PHP 8.x 对整值浮点在**非指数**范围输出整数形式（json_encode(12.0) === "12"），
+	// 这一点和 encoding/json 恰好一致；差别只出现在指数形式（PHP 补 .0: 1.0e+25）。
 	raw, err := json.Marshal(map[string]float64{"v": 12})
 	if err != nil {
 		t.Fatal(err)
@@ -74,8 +75,11 @@ func TestFloatsDifferFromEncodingJSON(t *testing.T) {
 	if string(raw) != `{"v":12}` {
 		t.Fatalf("encoding/json 行为变了: %s", raw)
 	}
-	if got := string(Marshal(New().Set("v", float64(12)))); got != `{"v":12.0}` {
+	if got := string(Marshal(New().Set("v", float64(12)))); got != `{"v":12}` {
 		t.Fatalf("phpjson got %s", got)
+	}
+	if got := string(Marshal(New().Set("v", 1e25))); got != `{"v":1.0e+25}` {
+		t.Fatalf("指数形式 phpjson got %s", got)
 	}
 }
 

@@ -295,7 +295,7 @@ func TestVideoCleanOverLimitByCapacity(t *testing.T) {
 	cfg := store.VideoConfig{Enabled: 1, MaxMB: 100, TotalLimitMB: 1, KeepDays: 0, AutoClean: 1}
 	rt := newMediaRouter(f, &cfg, "")
 	w := mediaAdminCall(t, rt, "admin_video_clean", `{"mode":"over_limit"}`)
-	want := `{"code":0,"msg":"ok","data":{"deleted":1,"freed_bytes":1048576,"visited":2,"skipped":"","mode":"over_limit","freed_mb":1.0,` +
+	want := `{"code":0,"msg":"ok","data":{"deleted":1,"freed_bytes":1048576,"visited":2,"skipped":"","mode":"over_limit","freed_mb":1,` +
 		`"usage":{"count":0,"total_bytes":0,"max_size":0,"max_size_id":0,"oldest_at":"","oldest_id":0,"cleaned_count":0}}}`
 	if w.Body.String() != want {
 		t.Fatalf("逐字不一致\n got=%s\nwant=%s", w.Body.String(), want)
@@ -612,7 +612,7 @@ func TestVersionUpdateReleaseDateDefaultsToday(t *testing.T) {
 		t.Fatalf("release_date 应默认今天 %s: %s", today, lastSettingJSON(t, f))
 	}
 	// size_mb 未提供 → (float)0 → 0.0
-	if !strings.Contains(lastSettingJSON(t, f), `"size_mb":0.0`) {
+	if !strings.Contains(lastSettingJSON(t, f), `"size_mb":0`) {
 		t.Fatalf("size_mb 应为浮点 0.0: %s", lastSettingJSON(t, f))
 	}
 }
@@ -657,7 +657,7 @@ func TestVersionUpdateHeadSize(t *testing.T) {
 	if w.Code != 200 {
 		t.Fatalf("应成功: %d %s", w.Code, w.Body.String())
 	}
-	if !strings.Contains(lastSettingJSON(t, f), `"size_mb":2.0`) {
+	if !strings.Contains(lastSettingJSON(t, f), `"size_mb":2`) {
 		t.Fatalf("应从 HEAD 算 2.0MB: %s", lastSettingJSON(t, f))
 	}
 }
@@ -671,7 +671,7 @@ func TestVersionUpdateExplicitSizeNotOverridden(t *testing.T) {
 	if w.Code != 200 {
 		t.Fatalf("应成功: %d %s", w.Code, w.Body.String())
 	}
-	if !strings.Contains(lastSettingJSON(t, f), `"size_mb":9.0`) {
+	if !strings.Contains(lastSettingJSON(t, f), `"size_mb":9`) {
 		t.Fatalf("显式 size_mb 应为 9.0: %s", lastSettingJSON(t, f))
 	}
 }
@@ -741,7 +741,7 @@ func TestAdminVideoUsageGolden(t *testing.T) {
 	// max_size=2097152 → max_mb=2.0；键序沿用 PHP 的就地追加顺序。
 	want := `{"code":0,"msg":"ok","data":{"count":6,"total_bytes":6291456,"max_size":2097152,` +
 		`"max_size_id":7,"oldest_at":"2026-01-01 00:00:00","oldest_id":2,"cleaned_count":2,` +
-		`"total_mb":6.0,"max_mb":2.0,` +
+		`"total_mb":6,"max_mb":2,` +
 		`"config":{"enabled":1,"max_mb":100,"total_limit_mb":600,"keep_days":0,"auto_clean":1},` +
 		`"server_upload_max_mb":0}}`
 	if w.Body.String() != want {
@@ -759,7 +759,7 @@ func TestAdminVideoUsageEmpty(t *testing.T) {
 	rt := newMediaRouter(f, nil, "")
 	w := mediaAdminCall(t, rt, "admin_video_usage", "")
 	want := `{"code":0,"msg":"ok","data":{"count":0,"total_bytes":0,"max_size":0,"max_size_id":0,` +
-		`"oldest_at":"","oldest_id":0,"cleaned_count":0,"total_mb":0.0,"max_mb":0.0,` +
+		`"oldest_at":"","oldest_id":0,"cleaned_count":0,"total_mb":0,"max_mb":0,` +
 		`"config":{"enabled":1,"max_mb":100,"total_limit_mb":600,"keep_days":0,"auto_clean":1},` +
 		`"server_upload_max_mb":0}}`
 	if w.Body.String() != want {
@@ -786,7 +786,7 @@ func TestAdminVideoUsageRoundHalf(t *testing.T) {
 	rt := newMediaRouter(f, nil, "")
 	w := mediaAdminCall(t, rt, "admin_video_usage", "")
 	body := w.Body.String()
-	if !strings.Contains(body, `"total_mb":1.5`) || !strings.Contains(body, `"max_mb":0.0`) {
+	if !strings.Contains(body, `"total_mb":1.5`) || !strings.Contains(body, `"max_mb":0`) {
 		t.Fatalf("非整 MB 取整不一致: %s", body)
 	}
 	if !strings.Contains(body, `"oldest_id":9`) {

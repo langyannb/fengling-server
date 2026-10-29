@@ -202,11 +202,13 @@ func AppendFloat(b []byte, f float64) []byte {
 	if i := strings.IndexAny(s, "eE"); i >= 0 {
 		mant, exp = s[:i], s[i+1:]
 	}
+	if exp == "" {
+		// PHP 8.x: 整值浮点(非指数)不补小数点 —— json_encode(1.0) === "1"
+		return append(b, mant...)
+	}
+	// 指数形式 PHP 会补 ".0": json_encode(1.0e+25) === "1.0e+25"
 	if !strings.Contains(mant, ".") {
 		mant += ".0"
-	}
-	if exp == "" {
-		return append(b, mant...)
 	}
 	// PHP: 1.0e+25 / 1.0e-5（符号保留、不补前导零）
 	sign := byte('+')

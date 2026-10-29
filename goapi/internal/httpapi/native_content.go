@@ -179,8 +179,13 @@ var appsColumns = []string{
 	"rating", "sort_order", "pack_id", "is_top", "is_featured", "is_active", "created_at", "updated_at",
 }
 
-// httpapi/categories 表列顺序（schema.sql:15-24）。
-var categoriesColumns = []string{"id", "parent_id", "name", "color", "icon", "sort_order", "created_at"}
+// categories 表的输出列顺序。
+//
+// 必须与**线上真实表**的列序一致，而不是仓库 schema.sql 的顺序：PHP 用的是
+// `SELECT * FROM categories`，PDO 的 FETCH_ASSOC 按返回列序排键；线上 `icon`
+// 是后来 ALTER TABLE 加上的，所以它排在最后（schema.sql 里则夹在 color 后面）。
+// 线上核对方式：`curl '.../api.php?action=categories'` 第一个对象的键序。
+var categoriesColumns = []string{"id", "parent_id", "name", "color", "sort_order", "created_at", "icon"}
 
 // banners 表列顺序（schema.sql:83-96 + 其后 `ADD COLUMN url AFTER app_id`）。
 var bannersColumns = []string{"id", "image", "title", "app_id", "url", "sort_order", "is_active", "created_at"}
