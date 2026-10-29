@@ -70,7 +70,8 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	switch r.URL.Query().Get("action") {
+	action := r.URL.Query().Get("action")
+	switch action {
 	case "health":
 		setCORS(w.Header())
 		rt.handleHealth(w, r)
@@ -447,6 +448,18 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		setCORS(w.Header())
 		rt.handleVersionUpdate(w, r)
 	default:
+		// ---------- 阶段 6：PHP 退休开关 ----------
+		// PHP_FALLBACK=0 时不再连 PHP-FPM（服务器上的 fpm 可以直接停掉），
+		// 未注册的 action 按 api.php 的 default 分支逐字回：
+		//   json_out(null, 404, '未知操作: ' . $action)
+		// HTTP 404 + {"code":404,"msg":"未知操作: xxx","data":null}，CORS 也照发
+		// （PHP 在 api.php:27-29 无条件发 CORS，早于 switch）。
+		// 注意：Open objectives 里的「未知 action 不自己回 404」只在 fallback 开启时成立。
+		if !rt.env.Cfg.PHPFallback {
+			setCORS(w.Header())
+			rt.env.newCtx(w, r, action).Error("未知操作: "+action, 404)
+			return
+		}
 		// 透传路径**不预设任何头**：CORS 由 PHP 自己发，避免重复。
 		rt.fcgi.Serve(w, r)
 	}

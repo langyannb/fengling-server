@@ -10,7 +10,7 @@ func TestDefaultsMatchProductionContract(t *testing.T) {
 	// 清掉可能被外部环境注入的值，保证断言的是纯默认值。
 	for _, k := range []string{
 		"GOAPI_ADDR", "FPM_NETWORK", "FPM_ADDR", "PHP_SCRIPT", "PHP_DOCROOT",
-		"PHP_SCRIPT_NAME", "DB_SOCKET", "DB_HOST", "DB_PORT", "DB_NAME", "DB_USER", "DB_PASS",
+		"PHP_SCRIPT_NAME", "PHP_FALLBACK", "DB_SOCKET", "DB_HOST", "DB_PORT", "DB_NAME", "DB_USER", "DB_PASS",
 		"DB_CHARSET", "REDIS_ADDR", "REDIS_PASSWORD", "REDIS_DB", "LOG_LEVEL",
 		"POLL_INTERVAL", "SSE_HEARTBEAT", "SSE_MAX_AGE", "WS_HEARTBEAT", "WS_IDLE",
 		"WS_WRITE_WAIT", "WS_SEND_BUFFER", "ONLINE_TTL",
@@ -26,6 +26,10 @@ func TestDefaultsMatchProductionContract(t *testing.T) {
 	}
 	if c.PHPScript != "/www/wwwroot/flfxk/api.php" || c.PHPDocRoot != "/www/wwwroot/flfxk" {
 		t.Errorf("php=%s/%s", c.PHPScript, c.PHPDocRoot)
+	}
+	// 阶段6：PHP 透传默认必须是开着的（迁移期靠它兜底），只有显式 PHP_FALLBACK=0 才关
+	if !c.PHPFallback {
+		t.Errorf("PHPFallback 默认必须是 true，得到 false")
 	}
 	// MySQL 默认走 unix socket（对齐 PDO 的 host=localhost 语义）
 	if c.DBSocket != "/tmp/mysql.sock" {
@@ -156,5 +160,30 @@ func TestLocalZoneIsShanghai(t *testing.T) {
 	// 对象键里的时间是服务器本地时间格式
 	if got := time.Date(2026, 10, 5, 20, 30, 15, 0, loc).Format("20060102150405"); got != "20261005203015" {
 		t.Fatalf("键时间格式=%s", got)
+	}
+}
+
+// TestPHPFallbackSwitch 阶段6 退休 PHP 的开关：只有显式的假值才关掉透传，
+// 其它（含空串、1、yes）都保持开启，避免运维写错一个值就把全站干挂。
+func TestPHPFallbackSwitch(t *testing.T) {
+	cases := []struct {
+		raw  string
+		want bool
+	}{
+		{"", true},
+		{"1", true},
+		{"yes", true},
+		{"TRUE", true},
+		{"0", false},
+		{"false", false},
+		{"no", false},
+		{"off", false},
+		{"OFF", false},
+	}
+	for _, tc := range cases {
+		t.Setenv("PHP_FALLBACK", tc.raw)
+		if got := Load().PHPFallback; got != tc.want {
+			t.Errorf("PHP_FALLBACK=%q => %v, 期望 %v", tc.raw, got, tc.want)
+		}
 	}
 }

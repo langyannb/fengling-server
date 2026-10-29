@@ -24,6 +24,13 @@ type Config struct {
 	PHPDocRoot    string // /www/wwwroot/flfxk
 	PHPScriptName string // /api.php（nginx 对外暴露的路径）
 
+	// PHPFallback 决定「没被 Go 原生接管的 action」怎么办：
+	//   true （默认，PHP_FALLBACK 缺省）= FastCGI 透传给 PHP-FPM，行为与迁移前一致；
+	//   false（PHP_FALLBACK=0）        = 返回与 PHP default 分支逐字相同的「未知操作」404，
+	//                                    **完全不连 PHP-FPM**，于是 fpm 进程可以停掉。
+	// 阶段6「退休 PHP」就靠这个开关：改动只有一行环境变量，回滚也是改回来。
+	PHPFallback bool
+
 	// MySQL（与 config.php 的 DB_* 对齐）。
 	//
 	// 生产上 config.php 里 DB_HOST='localhost'，在 PDO/mysqli 语义下这是**走 unix socket**
@@ -94,6 +101,7 @@ func Load() Config {
 		PHPScript:     getStr("PHP_SCRIPT", "/www/wwwroot/flfxk/api.php"),
 		PHPDocRoot:    getStr("PHP_DOCROOT", "/www/wwwroot/flfxk"),
 		PHPScriptName: getStr("PHP_SCRIPT_NAME", "/api.php"),
+		PHPFallback:   getBool("PHP_FALLBACK", true),
 
 		DBSocket:  getStr("DB_SOCKET", "/tmp/mysql.sock"),
 		DBHost:    getStr("DB_HOST", "localhost"),
@@ -157,6 +165,20 @@ func getInt(key string, def int) int {
 		return v
 	}
 	return def
+}
+
+// getBool 读布尔开关：缺省/空串回落到 def，0/false/no/off（大小写不敏感）为 false，
+// 其余任何非空值都当 true（运维写 PHP_FALLBACK=1、=yes 都认）。
+func getBool(key string, def bool) bool {
+	raw := strings.TrimSpace(env(key))
+	if raw == "" {
+		return def
+	}
+	switch strings.ToLower(raw) {
+	case "0", "false", "no", "off":
+		return false
+	}
+	return true
 }
 
 func getDur(key string, def time.Duration) time.Duration {
