@@ -212,6 +212,80 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		setCORS(w.Header())
 		rt.handleHarmReport(w, r)
 
+	// ---------- 阶段 5C：内容与展示（原生 23 个，见 native_content.go） ----------
+	// 锚点：紧接 `case "harm_report"` 块之后、5A 的 `case "lottery_info"` 之前。
+	// 公开/展示 8 个。
+	case "apps":
+		setCORS(w.Header())
+		rt.handleApps(w, r)
+	case "app_detail":
+		setCORS(w.Header())
+		rt.handleAppDetail(w, r)
+	case "categories":
+		setCORS(w.Header())
+		rt.handleCategories(w, r)
+	case "contributors":
+		setCORS(w.Header())
+		rt.handleContributors(w, r)
+	case "contributor_apps":
+		setCORS(w.Header())
+		rt.handleContributorApps(w, r)
+	case "stats":
+		setCORS(w.Header())
+		rt.handleStats(w, r)
+	case "banners":
+		setCORS(w.Header())
+		rt.handleBanners(w, r)
+	case "link_click":
+		setCORS(w.Header())
+		rt.handleLinkClick(w, r)
+	// 管理员写 15 个（category_* / app_* / banner_* / link_* / contributor_*）。
+	case "app_create":
+		setCORS(w.Header())
+		rt.handleAppCreate(w, r)
+	case "app_update":
+		setCORS(w.Header())
+		rt.handleAppUpdate(w, r)
+	case "app_delete":
+		setCORS(w.Header())
+		rt.handleAppDelete(w, r)
+	case "banner_create":
+		setCORS(w.Header())
+		rt.handleBannerCreate(w, r)
+	case "banner_update":
+		setCORS(w.Header())
+		rt.handleBannerUpdate(w, r)
+	case "banner_delete":
+		setCORS(w.Header())
+		rt.handleBannerDelete(w, r)
+	case "category_create":
+		setCORS(w.Header())
+		rt.handleCategoryCreate(w, r)
+	case "category_update":
+		setCORS(w.Header())
+		rt.handleCategoryUpdate(w, r)
+	case "category_delete":
+		setCORS(w.Header())
+		rt.handleCategoryDelete(w, r)
+	case "contributor_create":
+		setCORS(w.Header())
+		rt.handleContributorCreate(w, r)
+	case "contributor_update":
+		setCORS(w.Header())
+		rt.handleContributorUpdate(w, r)
+	case "contributor_delete":
+		setCORS(w.Header())
+		rt.handleContributorDelete(w, r)
+	case "link_create":
+		setCORS(w.Header())
+		rt.handleLinkCreate(w, r)
+	case "link_update":
+		setCORS(w.Header())
+		rt.handleLinkUpdate(w, r)
+	case "link_delete":
+		setCORS(w.Header())
+		rt.handleLinkDelete(w, r)
+
 	// ---------- 阶段 5A：抽奖（原生 12 个） ----------
 	// ⛔ 下面 6 个**刻意不注册**，落到 default 继续 FastCGI 透传 PHP：
 	//   ① 破坏性 4 个：admin_lottery_activity_reset / admin_lottery_codes_delete /
