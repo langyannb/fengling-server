@@ -422,6 +422,9 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "admin_video_clean":
 		setCORS(w.Header())
 		rt.handleAdminVideoClean(w, r)
+	case "admin_video_usage":
+		setCORS(w.Header())
+		rt.handleAdminVideoUsage(w, r)
 	case "crash_reports":
 		setCORS(w.Header())
 		rt.handleCrashReports(w, r)

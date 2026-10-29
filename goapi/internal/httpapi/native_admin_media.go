@@ -169,6 +169,27 @@ func (rt *Router) handleAdminVideoConfigGet(w http.ResponseWriter, r *http.Reque
 	c.JSON(out, 0, "ok", 0)
 }
 
+// handleAdminVideoUsage 对齐 api.php:2077-2085。
+//
+// 与 admin_video_config_get 的差别：usage 块**就地追加** total_mb / max_mb（PHP 用
+// `$vuse['total_mb'] = …` 往同一个数组里塞），再追加 config 与 server_upload_max_mb；
+// 键序因此是 count,total_bytes,max_size,max_size_id,oldest_at,oldest_id,cleaned_count,
+// total_mb,max_mb,config,server_upload_max_mb。
+func (rt *Router) handleAdminVideoUsage(w http.ResponseWriter, r *http.Request) {
+	c := rt.env.newCtx(w, r, "admin_video_usage")
+	if _, ok := rt.requireAdminRow(c); !ok {
+		return
+	}
+	out := rt.videoUsageStats(c)
+	tb, hasTB := out.Get("total_bytes")
+	ms, hasMS := out.Get("max_size")
+	out.Set("total_mb", phpRound(float64(intValue(tb, hasTB))/1048576, 2))
+	out.Set("max_mb", phpRound(float64(intValue(ms, hasMS))/1048576, 2))
+	out.Set("config", videoConfigJSON(rt.socialVideoConfig(c)))
+	out.Set("server_upload_max_mb", int64(videoServerMaxMB()))
+	c.JSON(out, 0, "ok", 0)
+}
+
 // handleAdminVideoConfigSet 对齐 api.php:2049-2075。
 func (rt *Router) handleAdminVideoConfigSet(w http.ResponseWriter, r *http.Request) {
 	c := rt.env.newCtx(w, r, "admin_video_config_set")

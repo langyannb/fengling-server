@@ -703,3 +703,105 @@ func TestAdminNoticeSetSave(t *testing.T) {
 		t.Fatalf("enabled 应归一化为 1: %s", got)
 	}
 }
+
+// ---------- 5D：admin_video_usage ----------
+
+// adminVideoUsageFake 让 videoUsageStats 的两张表都命中：每表 count=3、SUM=3MiB、
+// 最大 2MiB(id=7)、最旧 2026-01-01(id=2)、已清理 1 条。
+func adminVideoUsageFake() *lotteryFake {
+	f := newLotteryFake()
+	f.rowFn = func(q string, args []any) (store.Row, error) {
+		switch {
+		case strings.Contains(q, "COALESCE(SUM(video_size), 0) AS s"):
+			return srow("c", 3, "s", 3145728), nil
+		case strings.Contains(q, "ORDER BY video_size DESC LIMIT 1"):
+			return srow("id", 7, "video_size", 2097152), nil
+		case strings.Contains(q, "ORDER BY created_at ASC, id ASC LIMIT 1"):
+			return srow("id", 2, "created_at", "2026-01-01 00:00:00"), nil
+		}
+		return nil, nil
+	}
+	f.valFn = func(q string, args []any) (any, bool, error) {
+		if strings.Contains(q, "[视频已清理]") {
+			return int64(1), true, nil
+		}
+		return nil, false, nil
+	}
+	return f
+}
+
+func TestAdminVideoUsageGolden(t *testing.T) {
+	t.Setenv("VIDEO_SERVER_MAX_MB", "")
+	t.Setenv("PHP_UPLOAD_MAX_FILESIZE", "")
+	t.Setenv("PHP_POST_MAX_SIZE", "")
+	rt := newMediaRouter(adminVideoUsageFake(), nil, "")
+	w := mediaAdminCall(t, rt, "admin_video_usage", "")
+	// 两张表各 count=3/SUM=3MiB → count=6、total_bytes=6291456 → total_mb=6.0；
+	// max_size=2097152 → max_mb=2.0；键序沿用 PHP 的就地追加顺序。
+	want := `{"code":0,"msg":"ok","data":{"count":6,"total_bytes":6291456,"max_size":2097152,` +
+		`"max_size_id":7,"oldest_at":"2026-01-01 00:00:00","oldest_id":2,"cleaned_count":2,` +
+		`"total_mb":6.0,"max_mb":2.0,` +
+		`"config":{"enabled":1,"max_mb":100,"total_limit_mb":600,"keep_days":0,"auto_clean":1},` +
+		`"server_upload_max_mb":0}}`
+	if w.Body.String() != want {
+		t.Fatalf("逐字不一致\n got=%s\nwant=%s", w.Body.String(), want)
+	}
+	assertCORS(t, w.Header())
+}
+
+// 空库：count=0 时 total_mb / max_mb 必须是 0.0（PHP 的 round(0/1048576,2) 是 float）。
+func TestAdminVideoUsageEmpty(t *testing.T) {
+	t.Setenv("VIDEO_SERVER_MAX_MB", "")
+	t.Setenv("PHP_UPLOAD_MAX_FILESIZE", "")
+	t.Setenv("PHP_POST_MAX_SIZE", "")
+	f := newLotteryFake()
+	rt := newMediaRouter(f, nil, "")
+	w := mediaAdminCall(t, rt, "admin_video_usage", "")
+	want := `{"code":0,"msg":"ok","data":{"count":0,"total_bytes":0,"max_size":0,"max_size_id":0,` +
+		`"oldest_at":"","oldest_id":0,"cleaned_count":0,"total_mb":0.0,"max_mb":0.0,` +
+		`"config":{"enabled":1,"max_mb":100,"total_limit_mb":600,"keep_days":0,"auto_clean":1},` +
+		`"server_upload_max_mb":0}}`
+	if w.Body.String() != want {
+		t.Fatalf("逐字不一致\n got=%s\nwant=%s", w.Body.String(), want)
+	}
+}
+
+// 非整 MB：1572864B → 1.5（PHP round 保留两位但不补零）。
+func TestAdminVideoUsageRoundHalf(t *testing.T) {
+	t.Setenv("VIDEO_SERVER_MAX_MB", "")
+	f := newLotteryFake()
+	f.rowFn = func(q string, args []any) (store.Row, error) {
+		if strings.Contains(q, "social_pm_messages") {
+			return nil, nil // 第二张表留空，避免与第一张表累加
+		}
+		switch {
+		case strings.Contains(q, "COALESCE(SUM(video_size), 0) AS s"):
+			return srow("c", 1, "s", 1572864), nil
+		case strings.Contains(q, "ORDER BY created_at ASC, id ASC LIMIT 1"):
+			return srow("id", 9, "created_at", "2026-02-02 02:02:02"), nil
+		}
+		return nil, nil
+	}
+	rt := newMediaRouter(f, nil, "")
+	w := mediaAdminCall(t, rt, "admin_video_usage", "")
+	body := w.Body.String()
+	if !strings.Contains(body, `"total_mb":1.5`) || !strings.Contains(body, `"max_mb":0.0`) {
+		t.Fatalf("非整 MB 取整不一致: %s", body)
+	}
+	if !strings.Contains(body, `"oldest_id":9`) {
+		t.Fatalf("最旧行应为 id=9: %s", body)
+	}
+}
+
+// 鉴权：无 token 401、普通用户 HTTP400+code403（与其余后台接口一致）。
+func TestAdminVideoUsageAuth(t *testing.T) {
+	rt := newMediaRouter(adminVideoUsageFake(), nil, "")
+	w := mediaCallNoToken(rt, "admin_video_usage")
+	if w.Code != 401 || w.Body.String() != `{"code":401,"msg":"未登录","data":null}` {
+		t.Fatalf("无 token 应 401: code=%d body=%s", w.Code, w.Body.String())
+	}
+	w = callAction(rt, "GET", "/api.php?action=admin_video_usage", "", "", map[string]string{"Authorization": "Bearer " + lotteryUserToken})
+	if w.Code != 400 || w.Body.String() != `{"code":403,"msg":"没有权限, 仅管理员可操作","data":null}` {
+		t.Fatalf("普通用户应 HTTP400+code403: code=%d body=%s", w.Code, w.Body.String())
+	}
+}
