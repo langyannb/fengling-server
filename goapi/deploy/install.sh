@@ -16,7 +16,10 @@ APP_DIR=/opt/fengling
 BIN_PATH="$APP_DIR/goapi"
 ENV_DIR=/etc/fengling
 ENV_FILE="$ENV_DIR/goapi.env"
-SERVICE_NAME=fengling-goapi
+# 服务名: 线上既有实例叫 goapi(见 /etc/systemd/system/goapi.service)。
+# 用 fengling-goapi 会装出"第二个"服务去抢同一个 9100 端口, 所以默认沿用 goapi,
+# 需要别的名字用 SERVICE_NAME=xxx ./install.sh ... 覆盖。
+SERVICE_NAME="${SERVICE_NAME:-goapi}"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 PHP_DIR=/www/wwwroot/flfxk
 PHP_CONFIG="$PHP_DIR/config.php"

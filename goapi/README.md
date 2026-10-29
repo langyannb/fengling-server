@@ -263,7 +263,7 @@ S3_ACCESS_KEY/S3_SECRET_KEY/S3_PUBLIC_URL` 缺任何一个，`main` 直接拒绝
 
 ### 迁移与重启（**上线必读**）
 
-1. 阶段 1 的二进制上线后**必须重启 goapi**（`systemctl restart fengling-goapi`）：新增了 6 个 action、
+1. 阶段 1 的二进制上线后**必须重启 goapi**（`systemctl restart goapi`）：新增了 6 个 action、
    `/healthz`、以及常驻 ticker；不重启则这些能力不生效（老进程仍会把 6 个 action 透传给 PHP，
    行为正确但没有 native 收益）。
 2. **不需要一次性数据订正**。历史对象的 key 形态与本次新生成的一致（都是 `<dir>/<YmdHis>_<8hex>.<ext>`，

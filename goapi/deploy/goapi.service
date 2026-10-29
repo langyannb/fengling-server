@@ -1,7 +1,7 @@
 # 风铃分享库 Go 网关 (goapi) —— systemd 单元
 #
-# 安装: deploy/install.sh 会把它装到 /etc/systemd/system/fengling-goapi.service
-# 日志: journalctl -u fengling-goapi -f   (程序输出 JSON 结构化日志到 stdout)
+# 安装: deploy/install.sh 会把它装到 /etc/systemd/system/goapi.service
+# 日志: journalctl -u goapi -f   (程序输出 JSON 结构化日志到 stdout)
 [Unit]
 Description=风铃分享库 Go 网关 (goapi)
 Documentation=https://github.com/langyannb/fengling-server
