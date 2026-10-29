@@ -356,13 +356,9 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		setCORS(w.Header())
 		rt.handleLinkDelete(w, r)
 
-	// ---------- 阶段 5A：抽奖（原生 12 个） ----------
-	// ⛔ 下面 6 个**刻意不注册**，落到 default 继续 FastCGI 透传 PHP：
-	//   ① 破坏性 4 个：admin_lottery_activity_reset / admin_lottery_codes_delete /
-	//      admin_lottery_prize_delete / admin_lottery_codes_import；
-	//   ② 全表 UPDATE 2 个：admin_lottery_quota_reset_all / admin_lottery_quota_all
-	//      —— 验收脚本的安全门禁（FORBIDDEN_ADMIN）永不调用它们，保留透传可避免
-	//      「未经线上双跑验证就上线」；面板极少用，零风险。
+	// ---------- 阶段 5A + 5F：抽奖（原生 18 个） ----------
+	// 5A 迁了 12 个；5F 把余下 6 个「破坏性 / 全表 UPDATE」动作也改成 Go 原生
+	// （见 native_lottery_destructive.go）——抽奖 action 至此**全部**不再透传 PHP。
 	case "lottery_info":
 		setCORS(w.Header())
 		rt.handleLotteryInfo(w, r)
@@ -378,9 +374,18 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "admin_lottery_prize_save":
 		setCORS(w.Header())
 		rt.handleAdminLotteryPrizeSave(w, r)
+	case "admin_lottery_prize_delete":
+		setCORS(w.Header())
+		rt.handleAdminLotteryPrizeDelete(w, r)
 	case "admin_lottery_codes":
 		setCORS(w.Header())
 		rt.handleAdminLotteryCodes(w, r)
+	case "admin_lottery_codes_import":
+		setCORS(w.Header())
+		rt.handleAdminLotteryCodesImport(w, r)
+	case "admin_lottery_codes_delete":
+		setCORS(w.Header())
+		rt.handleAdminLotteryCodesDelete(w, r)
 	case "admin_lottery_config_get":
 		setCORS(w.Header())
 		rt.handleAdminLotteryConfigGet(w, r)
@@ -399,6 +404,15 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "admin_lottery_quota_reset":
 		setCORS(w.Header())
 		rt.handleAdminLotteryQuotaReset(w, r)
+	case "admin_lottery_quota_reset_all":
+		setCORS(w.Header())
+		rt.handleAdminLotteryQuotaResetAll(w, r)
+	case "admin_lottery_activity_reset":
+		setCORS(w.Header())
+		rt.handleAdminLotteryActivityReset(w, r)
+	case "admin_lottery_quota_all":
+		setCORS(w.Header())
+		rt.handleAdminLotteryQuotaAll(w, r)
 	// 阶段 5A 附带：about / notice 的**读取**（写入侧继续透传）
 	case "about_config_get":
 		setCORS(w.Header())

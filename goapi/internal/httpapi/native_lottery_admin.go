@@ -10,12 +10,9 @@ import (
 
 // 阶段 5A：后台抽奖管理的原生实现（api.php:1830-2227 里的 9 个）。
 //
-// ⛔ 刻意不在此文件实现（继续透传 PHP）：
-//   破坏性 4 个 —— admin_lottery_prize_delete(1878)、admin_lottery_codes_import(1934)、
-//   admin_lottery_codes_delete(1958)、admin_lottery_activity_reset(2189)；
-//   全表 UPDATE 2 个 —— admin_lottery_quota_reset_all(2173)、admin_lottery_quota_all(2220)
-//   （验收脚本的安全门禁 FORBIDDEN_ADMIN 永不调用它们 ⇒ 无法线上双跑验证，保留透传）。
-// 理由见 native_lottery.go 顶部注释。
+// 阶段 5F 补齐了余下 6 个破坏性与全表 UPDATE 的 action，见 native_lottery_destructive.go
+// （admin_lottery_prize_delete / codes_import / codes_delete / quota_reset_all /
+// activity_reset / quota_all）。本文件只放「读 + 单用户写」这些非破坏性逻辑。
 
 // ---------- PHP 数组语义小工具 ----------
 

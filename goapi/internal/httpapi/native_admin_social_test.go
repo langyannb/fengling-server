@@ -615,7 +615,7 @@ func TestAdminPmClear(t *testing.T) {
 	}
 }
 
-// ---------- 路由注册：22 个在、禁迁的被排除 ----------
+// ---------- 路由注册：22 个在、5F 接管的 6 个抽奖破坏性 action 也已在册 ----------
 
 func TestAdminRouteRegistration(t *testing.T) {
 	src, err := os.ReadFile("router.go")
@@ -637,14 +637,15 @@ func TestAdminRouteRegistration(t *testing.T) {
 			t.Fatalf("未注册: %s", a)
 		}
 	}
-	forbidden := []string{
-		// 5A 刻意透传的 6 个：本单与 5B-2 都不得注册（绝不迁移破坏性/全表 UPDATE）
+	// 阶段 5F 起，抽奖的 6 个破坏性 / 全表 UPDATE action 已由原生实现接管，
+	// 立场从「禁止注册」翻转为「必须在册」（见 native_lottery_destructive.go）。
+	destructive := []string{
 		"admin_lottery_activity_reset", "admin_lottery_codes_delete", "admin_lottery_codes_import",
 		"admin_lottery_prize_delete", "admin_lottery_quota_reset_all", "admin_lottery_quota_all",
 	}
-	for _, a := range forbidden {
-		if strings.Contains(code, `case "`+a+`":`) {
-			t.Fatalf("不该注册（越界）: %s", a)
+	for _, a := range destructive {
+		if !strings.Contains(code, `case "`+a+`":`) {
+			t.Fatalf("5F 已接管的抽奖 action 未注册: %s", a)
 		}
 	}
 }
