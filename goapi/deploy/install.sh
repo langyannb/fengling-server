@@ -2,10 +2,14 @@
 # 风铃分享库 Go 网关 (goapi) 服务器侧安装脚本
 #
 #   用法:  sudo ./install.sh [--binary /path/to/goapi-linux-amd64] [--nginx-ext-dir DIR]
-#          sudo ./install.sh --rollback
+#          sudo ./install.sh --rollback          # 全站回到纯 PHP(删 nginx 片段 + 停服务)
+#          sudo ./install.sh --retire-php        # 阶段6: PHP_FALLBACK=0, 之后可停 PHP-FPM
+#          sudo ./install.sh --restore-php       # 反向: PHP_FALLBACK=1, 透传立刻回来
 #
 # 特性: 幂等(可重复执行) / 改动前先备份 / nginx -t 通过才 reload / 一键回滚
 # 说明: 本脚本只在服务器上由 root 执行; 它不做任何"业务代码"改动, 只装二进制+env+nginx 片段。
+#       --retire-php 只改 env 里的一个开关并重启 goapi, **不会**去 stop 任何 PHP 进程;
+#       停 fpm 要不要停、怎么停, 由你确认站点没有别的 PHP 入口后手工执行(脚本会打印命令)。
 set -euo pipefail
 
 APP_DIR=/opt/fengling
@@ -27,14 +31,17 @@ SERVICE_SRC="$SCRIPT_DIR/goapi.service"
 BIN_SRC="$SCRIPT_DIR/goapi-linux-amd64"
 NGINX_EXT_DIR="${NGINX_EXT_DIR:-}"
 DO_ROLLBACK=0
+PHP_FALLBACK_MODE=""   # "" | off | on
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --binary)        BIN_SRC="${2:?}"; shift 2 ;;
     --nginx-ext-dir) NGINX_EXT_DIR="${2:?}"; shift 2 ;;
     --rollback)      DO_ROLLBACK=1; shift ;;
+    --retire-php)    PHP_FALLBACK_MODE=off; shift ;;
+    --restore-php)   PHP_FALLBACK_MODE=on; shift ;;
     -h|--help)
-      sed -n '2,10p' "$0"; exit 0 ;;
+      sed -n '2,12p' "$0"; exit 0 ;;
     *) echo "未知参数: $1" >&2; exit 2 ;;
   esac
 done
@@ -104,6 +111,14 @@ rollback() {
   systemctl stop "$SERVICE_NAME" 2>/dev/null || true
   systemctl disable "$SERVICE_NAME" 2>/dev/null || true
   log "服务已停止并禁用(二进制 $BIN_PATH 与 $ENV_FILE 保留)"
+  # 阶段6:若之前用 --retire-php 关过透传,回滚时必须把它打开,否则重新启用服务后
+  # 未注册的 action 会直接 404 而不是交给 PHP。
+  if [ -f "$ENV_FILE" ] && grep -qE '^PHP_FALLBACK=' "$ENV_FILE"; then
+    sed -i -E 's/^PHP_FALLBACK=.*/PHP_FALLBACK=1/' "$ENV_FILE"
+    log "已把 $ENV_FILE 里的 PHP_FALLBACK 改回 1"
+  fi
+  log "⚠️ 若之前停过 PHP-FPM, 现在必须启动它, 否则全站 api.php 无人应答:"
+  log "   宝塔面板 -> 软件商店 -> PHP-85 -> 启动     或   systemctl start php-fpm-85"
   log "验证: curl -sS -o /dev/null -w '%{http_code}\\n' http://127.0.0.1/api.php?action=version"
   exit 0
 }
@@ -136,6 +151,9 @@ generate_env() {
     echo "PHP_SCRIPT=$(env_quote "$PHP_API")"
     echo "PHP_DOCROOT=$(env_quote "$PHP_DIR")"
     echo "PHP_SCRIPT_NAME=$(env_quote /api.php)"
+    # 阶段6 开关: 1 = 未原生的 action 透传给 PHP-FPM(迁移期默认); 0 = 完全不连 fpm。
+    # 切换用 --retire-php / --restore-php, 不要手工编辑这一行以外的内容。
+    echo "PHP_FALLBACK=1"
     echo "DB_SOCKET=$(env_quote "$(mysql_socket)")"
     echo "DB_HOST=$(env_quote "$(php_const "$PHP_CONFIG" DB_HOST)")"
     echo "DB_PORT=$(env_quote "$(php_const "$PHP_CONFIG" DB_PORT)")"
@@ -160,6 +178,47 @@ generate_env() {
   install -m 600 -o root -g root "$tmp" "$ENV_FILE"
   rm -f "$tmp"
   log "已生成 $ENV_FILE (600, 共 $(wc -l < "$ENV_FILE") 行)"
+}
+
+# ---------- 阶段6: PHP 退休开关 ----------
+# 只改 /etc/fengling/goapi.env 里的一行 + 重启 goapi, **不动任何 PHP 进程**。
+# 关闭后 goapi 的 default 分支不再连 FPM, 未注册 action 逐字回 PHP 的「未知操作」404。
+set_php_fallback() { # set_php_fallback <0|1>
+  local want="$1" probe body code
+  [ -f "$ENV_FILE" ] || die "找不到 $ENV_FILE(先正常安装一次)"
+  if grep -qE '^PHP_FALLBACK=' "$ENV_FILE"; then
+    sed -i -E "s/^PHP_FALLBACK=.*/PHP_FALLBACK=${want}/" "$ENV_FILE"
+  else
+    printf 'PHP_FALLBACK=%s\n' "$want" >> "$ENV_FILE"
+  fi
+  log "已写入 PHP_FALLBACK=${want}"
+  systemctl restart "$SERVICE_NAME"
+  sleep 1
+
+  # 用一个必然不存在的 action 探测"到底谁来接"：
+  #   want=0 -> goapi 自己回 404 未知操作；want=1 -> 由 PHP-FPM 回（body/状态码来自 PHP）
+  probe="http://${GOAPI_LISTEN}/api.php?action=__goapi_probe__"
+  body="$(curl -sS "$probe" 2>/dev/null || true)"
+  code="$(curl -sS -o /dev/null -w '%{http_code}' "$probe" 2>/dev/null || true)"
+  if [ "$want" = "0" ]; then
+    case "$body" in
+      *"未知操作"*) log "✅ 透传已关闭: 未知 action 由 goapi 自己回 ($code)" ;;
+      *) log "⚠️ 探测结果异常: HTTP=$code body=$body" ;;
+    esac
+    log ""
+    log "下一步(手工确认后再执行):本站只有 /api.php 走 PHP, 现在可以停 fpm 了"
+    log "  宝塔面板 -> 软件商店 -> PHP-85 -> 停止   或   systemctl stop php-fpm-85"
+    log "  停完验证: curl -sS 'http://127.0.0.1/api.php?action=version'"
+    log "  真机再点几个页面(首页/详情/后台), 确认没有 502"
+    log "回滚: $0 --restore-php  然后启动 PHP-FPM"
+  else
+    case "$body" in
+      *"未知操作"*) log "⚠️ 透传开着, 但这次是 goapi 回的($code) —— 检查 env 是否真的写进去了" ;;
+      *) log "✅ 透传已恢复: 未知 action 交给 PHP-FPM 处理 (HTTP=$code)" ;;
+    esac
+    log "若之前停过 PHP-FPM, 现在必须启动它: systemctl start php-fpm-85"
+  fi
+  exit 0
 }
 
 # ---------- 安装 ----------
@@ -213,4 +272,10 @@ install_all() {
   log "回滚命令: $0 --rollback"
 }
 
-if [ "$DO_ROLLBACK" = 1 ]; then rollback; else install_all; fi
+if [ "$DO_ROLLBACK" = 1 ]; then
+  rollback
+elif [ -n "$PHP_FALLBACK_MODE" ]; then
+  if [ "$PHP_FALLBACK_MODE" = off ]; then set_php_fallback 0; else set_php_fallback 1; fi
+else
+  install_all
+fi
