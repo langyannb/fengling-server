@@ -233,7 +233,7 @@ func TestAdminLotteryPrizeDeleteRejections(t *testing.T) {
 func TestAdminLotteryCodesImportPath(t *testing.T) {
 	f := newLotteryFake()
 	valFor(f, map[string]any{
-		"SELECT id FROM lottery_prizes WHERE id = ?":                       int64(3),
+		"SELECT id FROM lottery_prizes WHERE id = ?":                            int64(3),
 		"SELECT COUNT(*) FROM lottery_codes WHERE prize_id = ? AND user_id = 0": int64(9),
 	})
 	execAffectsFor(f, map[string]int64{})
@@ -302,7 +302,7 @@ func TestAdminLotteryCodesImportBoundaries(t *testing.T) {
 		for _, body := range []string{`{"prize_id":3}`, `{"prize_id":3,"text":null}`, `{"prize_id":3,"text":""}`} {
 			f := newLotteryFake()
 			valFor(f, map[string]any{
-				"SELECT id FROM lottery_prizes WHERE id = ?":                           int64(3),
+				"SELECT id FROM lottery_prizes WHERE id = ?":                            int64(3),
 				"SELECT COUNT(*) FROM lottery_codes WHERE prize_id = ? AND user_id = 0": int64(0),
 			})
 			w := callLotteryAdmin(t, newLotteryRouter(f), "admin_lottery_codes_import", body)
@@ -320,17 +320,17 @@ func TestAdminLotteryCodesImportBoundaries(t *testing.T) {
 		// 5 位 → invalid；6 位 → 有效；64 位 → 有效；65 位 → invalid；含 -/_ 合法；含空格/中文非法
 		f := newLotteryFake()
 		valFor(f, map[string]any{
-			"SELECT id FROM lottery_prizes WHERE id = ?":                           int64(3),
+			"SELECT id FROM lottery_prizes WHERE id = ?":                            int64(3),
 			"SELECT COUNT(*) FROM lottery_codes WHERE prize_id = ? AND user_id = 0": int64(0),
 		})
 		codes := []string{
-			"ABCDE",                            // 5
-			"ABCDEF",                           // 6 ✓
-			strings.Repeat("A", 64),            // 64 ✓
-			strings.Repeat("A", 65),            // 65 ✗
-			"AB-CD_",                           // 合法
-			"AB CDE",                           // 空格 ✗（trim 只去两端）
-			"卡密ABCDEF",                         // 中文 ✗
+			"ABCDE",                 // 5
+			"ABCDEF",                // 6 ✓
+			strings.Repeat("A", 64), // 64 ✓
+			strings.Repeat("A", 65), // 65 ✗
+			"AB-CD_",                // 合法
+			"AB CDE",                // 空格 ✗（trim 只去两端）
+			"卡密ABCDEF",              // 中文 ✗
 		}
 		body := `{"prize_id":3,"text":"` + strings.Join(codes, `\n`) + `"}`
 		w := callLotteryAdmin(t, newLotteryRouter(f), "admin_lottery_codes_import", body)
@@ -490,10 +490,10 @@ func TestAdminLotteryActivityResetModes(t *testing.T) {
 		f := newLotteryFake()
 		f.nowText = "2026-06-01 12:00:00"
 		execAffectsFor(f, map[string]int64{
-			"UPDATE users SET lottery_reset_at = ?, lottery_day_reset_at = ?":               4,
-			"DELETE FROM lottery_draws":                                                      9,
-			"UPDATE lottery_codes SET user_id = 0, used_at = NULL WHERE user_id <> 0":        5,
-			"DELETE FROM notifications WHERE type = 'lottery'":                               2,
+			"UPDATE users SET lottery_reset_at = ?, lottery_day_reset_at = ?":         4,
+			"DELETE FROM lottery_draws":                                               9,
+			"UPDATE lottery_codes SET user_id = 0, used_at = NULL WHERE user_id <> 0": 5,
+			"DELETE FROM notifications WHERE type = 'lottery'":                        2,
 		})
 		w := callLotteryAdmin(t, newLotteryRouter(f), "admin_lottery_activity_reset", `{"mode":"activity"}`)
 		assertBody(t, w, `{"code":0,"msg":"ok","data":{"mode":"activity","users":4,"draws_deleted":9,"codes_released":5,"notices_deleted":2}}`)

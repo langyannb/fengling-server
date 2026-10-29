@@ -254,8 +254,8 @@ func (rt *Router) handleAdminLotteryQuotaResetAll(w http.ResponseWriter, r *http
 // mode = quota    只清所有人「总抽奖次数」(中奖记录与已用卡密都保留)
 // mode = daily    只清所有人「今日已抽次数」(总次数不变, 今天能再抽)
 // mode = activity 整个活动重开: 删中奖记录 + 所有人总次数与今日次数归零
-//                 + release_codes=1 把已经发出去的卡密退回卡密池(user_id=0)
-//                 + clear_notices=1 删掉含卡密的通知, 避免旧卡密还能被看到
+//   - release_codes=1 把已经发出去的卡密退回卡密池(user_id=0)
+//   - clear_notices=1 删掉含卡密的通知, 避免旧卡密还能被看到
 //
 // daily 分支在 PHP 里是 json_out() 后 exit（提前返回），这里用 return 等价实现；
 // 返回键序固定 mode/users/draws_deleted/codes_released/notices_deleted。
