@@ -8,28 +8,32 @@ import (
 	"github.com/langyannb/fengling-server/goapi/internal/store"
 )
 
-// 阶段 5A 后台抽奖单测：逐字文案 / 校验顺序 / 403 落 HTTP 400 /
-// 破坏性 action 未注册（仍走透传）。
+// 阶段 5A 后台抽奖单测：逐字文案 / 校验顺序 / 403 落 HTTP 400。
+// 阶段 5F 起，当年「刻意不注册」的 6 个破坏性 action 也已原生接管
+// （见 native_lottery_destructive_test.go），本文件只保留注册与鉴权的群体断言。
 
-// lotteryNativeActions 是本次原生接管的 12 个抽奖 action。
+// lotteryNativeActions 是原生接管的 18 个抽奖 action（5A 的 12 个 + 5F 的 6 个破坏性）。
 var lotteryNativeActions = []string{
 	"lottery_info", "lottery_draw", "lottery_records",
 	"admin_lottery_prizes", "admin_lottery_prize_save", "admin_lottery_codes",
 	"admin_lottery_config_get", "admin_lottery_config_set", "admin_lottery_window_preview",
 	"admin_lottery_draws", "admin_lottery_quota_set", "admin_lottery_quota_reset",
+	"admin_lottery_prize_delete", "admin_lottery_codes_import", "admin_lottery_codes_delete",
+	"admin_lottery_quota_reset_all", "admin_lottery_activity_reset", "admin_lottery_quota_all",
 }
 
-// lotteryAdminActions 是 9 个需要 require_admin() 的原生后台接口。
+// lotteryAdminActions 是 15 个需要 require_admin() 的原生后台接口。
 var lotteryAdminActions = []string{
 	"admin_lottery_prizes", "admin_lottery_prize_save", "admin_lottery_codes",
 	"admin_lottery_config_get", "admin_lottery_config_set", "admin_lottery_window_preview",
 	"admin_lottery_draws", "admin_lottery_quota_set", "admin_lottery_quota_reset",
+	"admin_lottery_prize_delete", "admin_lottery_codes_import", "admin_lottery_codes_delete",
+	"admin_lottery_quota_reset_all", "admin_lottery_activity_reset", "admin_lottery_quota_all",
 }
 
-// lotteryPassthroughActions 是**必须继续透传 PHP**的 6 个抽奖 action：
-// 契约 §9.1 标为破坏性的 4 个 + 两个「全表 UPDATE」级动作
-// （验收脚本的安全门禁 FORBIDDEN_ADMIN 永不调用它们 ⇒ 无法线上双跑验证）。
-var lotteryPassthroughActions = []string{
+// lotteryDestructiveActions 是阶段 5F 从「透传 PHP」改成原生实现的 6 个抽奖 action：
+// 契约 §9.1 标为破坏性的 4 个 + 两个「全表 UPDATE」级动作。
+var lotteryDestructiveActions = []string{
 	"admin_lottery_activity_reset",
 	"admin_lottery_codes_delete",
 	"admin_lottery_prize_delete",
@@ -59,31 +63,35 @@ func TestAdminLotteryAuthCodes(t *testing.T) {
 	}
 }
 
-// TestLotteryPassthroughActionsStayPassthrough 是本次派单的硬约束：
-// 破坏性 4 个 + 全表 UPDATE 2 个，**一个都不许**注册成原生 handler。
-func TestLotteryPassthroughActionsStayPassthrough(t *testing.T) {
+// TestLotteryDestructiveActionsAreNative 是阶段 5F 的验收断言：
+// 破坏性 4 个 + 全表 UPDATE 2 个，这 6 个必须已经在 router.go 里有显式 case，
+// 并且**不再**落到 default 的 FastCGI 透传分支。
+func TestLotteryDestructiveActionsAreNative(t *testing.T) {
 	src, err := os.ReadFile("router.go")
 	if err != nil {
 		t.Fatalf("读 router.go 失败: %v", err)
 	}
 	code := string(src)
-	for _, a := range lotteryPassthroughActions {
-		if strings.Contains(code, `case "`+a+`":`) {
-			t.Fatalf("action %s 被注册成了原生分支（必须继续透传 PHP）", a)
+	for _, a := range lotteryDestructiveActions {
+		if !strings.Contains(code, `case "`+a+`":`) {
+			t.Fatalf("action %s 未在 router.go 注册成原生分支", a)
 		}
 	}
-	// 反向校验：12 个原生抽奖 action 必须都已注册。
+	// 反向校验：18 个原生抽奖 action 必须都已注册。
 	for _, a := range lotteryNativeActions {
 		if !strings.Contains(code, `case "`+a+`":`) {
 			t.Fatalf("action %s 未在 router.go 注册", a)
 		}
 	}
-	// 行为校验：这些 action 落进 default 分支 → 走 FastCGI（此处 FPM 不可达，应回网关错误）。
-	brt := brokenRouter(t)
-	for _, a := range lotteryPassthroughActions {
-		w := callAction(brt, "POST", "/api.php?action="+a, `{}`, "application/json", nil)
-		if w.Code != 500 || !strings.Contains(w.Body.String(), "网关无法连接 PHP-FPM") {
-			t.Fatalf("%s 没有走透传分支: HTTP=%d body=%s", a, w.Code, w.Body.String())
+	// 行为校验：未注册的 action 会落进 default 走 FastCGI 并回「网关无法连接 PHP-FPM」；
+	// 这 6 个既然原生接管，就应该先撞 require_admin（未登录 → 401 未登录）。
+	for _, a := range lotteryDestructiveActions {
+		w := callAction(newLotteryRouter(newLotteryFake()), "POST", "/api.php?action="+a, `{}`, "application/json", nil)
+		if w.Code == 500 && strings.Contains(w.Body.String(), "网关无法连接 PHP-FPM") {
+			t.Fatalf("%s 仍在透传 PHP: HTTP=%d body=%s", a, w.Code, w.Body.String())
+		}
+		if w.Code != 401 || !strings.Contains(w.Body.String(), "未登录") {
+			t.Fatalf("%s 应走原生鉴权分支: HTTP=%d body=%s", a, w.Code, w.Body.String())
 		}
 	}
 }
