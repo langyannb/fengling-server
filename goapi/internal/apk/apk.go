@@ -40,21 +40,23 @@ func ParseFile(path string) Info {
 	}
 	defer a.Close()
 
+	// 缺 AndroidManifest.xml 时**不能**直接返回：PHP 的 parse() 只置 $out['error'] 然后继续走
+	// 文件名兜底（$m 未定义 → !empty($m['icon_res']) 为假 → 跳过 arsc 反查 → 仍执行 pickIcon）。
+	// 结果就是"没有 manifest 但有 res/mipmap-*/ic_launcher.png"的包在 PHP 侧**有图标**，
+	// uc_import 会照常上传它。这里必须保持同样的行为，否则这类真实包会被丢掉图标。
+	var m manifestInfo
 	manifest, ok := a.read("AndroidManifest.xml")
-	if !ok || len(manifest) == 0 {
-		// PHP 这里只置 error 然后继续往下跑文件名兜底（$m 未定义 → 反查被跳过）。
-		// Go 侧按「有错就返回零值 + Error」处理：连 Manifest 都没有的包，包名/版本全读不出来，
-		// 再挑一张来源说不清的图标只会让调用方误解字段含义。
+	if ok && len(manifest) > 0 {
+		m = parseManifest(manifest)
+		out.Package = m.pkg
+		out.VersionName = m.versionName
+		out.VersionCode = m.versionCode
+		out.Label = m.label
+	} else {
 		out.Error = "APK 内没有 AndroidManifest.xml"
-		return out
 	}
 
-	m := parseManifest(manifest)
-	out.Package = m.pkg
-	out.VersionName = m.versionName
-	out.VersionCode = m.versionCode
-	out.Label = m.label
-
+	// m.iconRes 为 0（缺 manifest / manifest 没写 android:icon）时反查直接返回 nil，落到 pickIcon。
 	icon := resolveIconByResID(a, m.iconRes)
 	if icon == nil {
 		icon = pickIcon(a)

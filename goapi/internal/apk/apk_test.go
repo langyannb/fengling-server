@@ -90,7 +90,9 @@ func TestParseFileFullUTF16(t *testing.T) {
 	}
 }
 
-// 没有 AndroidManifest.xml：只给 error，其余字段保持零值。
+// 没有 AndroidManifest.xml：置 error，包名/版本/标签保持零值，但**仍要**走文件名兜底挑图标。
+// 这是 PHP 的真实行为：$m 未定义 → !empty($m['icon_res']) 为假 → 跳过 arsc 反查 → 继续 pickIcon。
+// uc_import 只看 icon_data 是否非空，所以这条路径决定了「混淆包/残缺包能不能显示图标」。
 func TestParseFileNoManifest(t *testing.T) {
 	apkBytes := buildTestAPK(t, []zipEntry{
 		{launcherIconPath, makePNG(t, 192, 192, color.White)},
@@ -101,7 +103,25 @@ func TestParseFileNoManifest(t *testing.T) {
 	wantEqual(t, "VersionName", got.VersionName, "")
 	wantEqual(t, "VersionCode", got.VersionCode, int64(0))
 	wantEqual(t, "Label", got.Label, "")
+	// 图标兜底必须与 PHP 一致：这里能挑到 ic_launcher.png
+	wantEqual(t, "IconPath", got.IconPath, launcherIconPath)
+	wantEqual(t, "IconExt", got.IconExt, "png")
+	if w, _ := mustIconSize(t, got.IconData); w != 192 {
+		t.Errorf("图标宽 = %d, 期望 192", w)
+	}
+}
+
+// 没有 AndroidManifest.xml 且没有任何候选图标：只有 Error，图标字段保持空。
+func TestParseFileNoManifestNoIcon(t *testing.T) {
+	apkBytes := buildTestAPK(t, []zipEntry{
+		{"classes.dex", []byte("dex\n035\x00")},
+		{"res/drawable/bg.png", makePNG(t, 64, 64, color.Black)}, // 不是 launcher 命名，兜底不选它
+	})
+	got := ParseFile(writeAPK(t, "no-manifest-no-icon.apk", apkBytes))
+	wantEqual(t, "Error", got.Error, "APK 内没有 AndroidManifest.xml")
+	wantEqual(t, "Package", got.Package, "")
 	wantEqual(t, "IconPath", got.IconPath, "")
+	wantEqual(t, "IconExt", got.IconExt, "png")
 	if got.IconData != nil {
 		t.Errorf("IconData = %d 字节, 期望 nil", len(got.IconData))
 	}
