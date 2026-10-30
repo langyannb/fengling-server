@@ -175,7 +175,7 @@ func TestAdminGroupsLiteral(t *testing.T) {
 	}
 }
 
-func TestAdminNotificationListRawRowStrings(t *testing.T) {
+func TestAdminNotificationListIntColumns(t *testing.T) {
 	f := newLotteryFake()
 	f.valFn = func(q string, args []any) (any, bool, error) {
 		if strings.Contains(q, "SELECT COUNT(*) FROM notifications n") {
@@ -192,7 +192,7 @@ func TestAdminNotificationListRawRowStrings(t *testing.T) {
 	rt := newLotteryRouter(f)
 	w := adminCall(t, rt, "admin_notification_list", "")
 	// PDO 模拟预处理把整数返回成字符串；n.* 列序固定，随后 nickname/username/user_name。
-	want := `{"code":0,"msg":"ok","data":{"list":[{"id":"9","user_id":"3","title":"标题","content":"正文","type":"admin","link":"","is_read":"0","created_at":"2026-01-01 10:00:00","nickname":"昵称","username":"u","user_name":"昵称"}],"total":2,"page":1,"page_size":20}}`
+	want := `{"code":0,"msg":"ok","data":{"list":[{"id":9,"user_id":3,"title":"标题","content":"正文","type":"admin","link":"","is_read":0,"created_at":"2026-01-01 10:00:00","nickname":"昵称","username":"u","user_name":"昵称"}],"total":2,"page":1,"page_size":20}}`
 	if w.Body.String() != want {
 		t.Fatalf("admin_notification_list 逐字不一致\n got=%s\nwant=%s", w.Body.String(), want)
 	}

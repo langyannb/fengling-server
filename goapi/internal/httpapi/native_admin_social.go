@@ -31,6 +31,11 @@ var notificationColumns = []string{
 	"id", "user_id", "title", "content", "type", "link", "is_read", "created_at",
 }
 
+// notificationIntCols 是 notifications 表里的整数列（线上 information_schema 实测：
+// id/user_id 是 int，is_read 是 tinyint，其余是 varchar/text/timestamp）。
+// 理由同 native_admin_media.go 的 crashIntCols：PHP 8.1+ 的 PDO 对整数列返回原生 int。
+var notificationIntCols = map[string]bool{"id": true, "user_id": true, "is_read": true}
+
 // tagSplitRe 对齐 api.php:3851 `preg_split('/[,，、]+/u', $raw)`。
 var tagSplitRe = regexp.MustCompile("[,，、]+")
 
@@ -987,6 +992,15 @@ func (rt *Router) handleAdminNotificationList(w http.ResponseWriter, r *http.Req
 		// 因此这里对 n.* 列用 rowRaw（NULL→null，其余按 PHP (string) 输出）。
 		item := phpjson.New()
 		for _, col := range notificationColumns {
+			if notificationIntCols[col] {
+				v, ok := row.Get(col)
+				if !ok || v == nil {
+					item.Set(col, nil)
+				} else {
+					item.Set(col, phpInt(v))
+				}
+				continue
+			}
 			item.Set(col, rowRaw(row, col))
 		}
 		item.Set("nickname", rowRaw(row, "nickname"))

@@ -89,6 +89,20 @@ tools/goapi_diff.sh         双跑逐字对比
 
 ## 逐字对齐要点（改动前务必先读）
 
+### PHP 8.1+ 的 PDO 取值类型（**最容易踩的一条**）
+
+线上 PHP 8.5.6 实测：即使 `PDO::ATTR_EMULATE_PREPARES = true`，`PDO::query()` 与
+`prepare()->execute()` **都返回原生 integer**（`gettype()` 全是 `integer`）。老文档里
+「模拟预处理一律返回字符串」的说法对 PHP ≥ 8.1 已经不成立。因此：
+
+- 整数列（int / tinyint / bigint）输出成 JSON **数字**；
+- DECIMAL / BIT / 日期时间 / 字符类输出成 **字符串**；
+- `store.scanRow` 因此要把 `uint64`（`BIGINT UNSIGNED`）归一成 `int64`，否则
+  `phpInt` / `phpStr` 都不认识它，会静默变成 `0` / `""`
+  （线上 `admin_video_usage` 的 `max_size_id` 曾因此恒为 0）；
+- 需要逐字对齐 `SELECT *` 的 action，列序要按**线上真实表**取，不能按仓库 `schema.sql`
+  （线上 `categories.icon` 是 ALTER 后加的，排在最后）。
+
 - **响应壳**：`{"code":…,"msg":…,"data":…}`，`Content-Type: application/json; charset=utf-8`，
   无缓存时 `Cache-Control: no-store`；`json_error` 的 `data` 恒为 `null`（不是 `{}`/`[]`）。
 - **HTTP 状态码映射**（`config.php:50-59`）：`0→200`、`401→401`、`404→404`、`500→500`、
@@ -391,6 +405,11 @@ sudo systemctl start php-fpm-85          # 若已停过 fpm，必须启动
 - 6 个破坏性抽奖 action（`prize_delete` / `codes_import` / `codes_delete` /
   `quota_reset_all` / `activity_reset` / `quota_all`）是原生实现，但**永远不进双跑脚本**，
   只在后台面板由人手工点；handler 顶部有 `⚠️ 破坏性操作` 注释。
+- `server_upload_max_mb` 由环境变量 `VIDEO_SERVER_MAX_MB` 决定（Go 读不到 php.ini）。
+  线上实测 php-fpm 是 `upload_max_filesize=128M` / `post_max_size=140M`（**与 php.ini
+  文件里写的 50M 不同** —— fpm 未重载，进程里还是老值），所以 `min=128`。`install.sh`
+  会用 `php -r` 现场探测并写进 env；手工部署时**必须**把该键设成与切换前 PHP 输出一致的值，
+  否则后台「上传上限」卡片会从 128 变成 0（`admin_video_config_set` 的 max_mb 校验也会失效）。
 
 ## 双跑逐字对比
 
@@ -422,9 +441,12 @@ file "$HOME/goapi-linux-amd64"   # ELF 64-bit LSB executable, x86-64, statically
 
 ## 已知限制与风险
 
-- **本机不能替线上验收**：开发机没有 PHP、MySQL、Redis、S3，验证只有编译 + 单测。
-  线上逐字一致靠 `tools/goapi_diff.sh` 双跑（公开 10 例 + 需登录 22 例，`PHP_FALLBACK=0`
-  之后还要再跑一次，那才是「脱离 PHP 仍然一致」的证据）。
+- **线上双跑已跑过一轮（`PHP_FALLBACK=1`，Go 与 PHP 并排）**：公开 10 例 + 管理员 17 例 +
+  普通用户 9 例 + 参数化 4 例，除破坏性抽奖与写操作外**全部逐字一致**。`PHP_FALLBACK=0`
+  之后还要再跑一次，那才是「脱离 PHP 仍然一致」的证据。
+- 开发机没有 PHP、MySQL、Redis、S3，本地验证只有编译 + 单测；本轮线上发现的
+  三处真实差异（float 补 `.0`、`categories` 列序、`uint64`/整数列类型）都是本地单测
+  覆盖不到、只能靠线上双跑抓出来的，说明**每改一处 SQL/序列化都要重跑双跑**。
 - **UC 网盘的下载 → 压缩 → 传 S3 链路未在本机覆盖**：`internal/uc` 的 52 个用例全用假 UC 服务，
   `uc_import` 的单测只到「未登录 / kind=none / 上游错误映射」，真实导入必须在服务器上点一次。
 - gzip 的 deflate 流不保证与 zlib 逐字节相同（解压后一致）；gzip 头已对齐。

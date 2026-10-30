@@ -400,7 +400,7 @@ func TestCrashReportsList(t *testing.T) {
 	}
 	rt := newMediaRouter(f, nil, "")
 	w := mediaAdminCall(t, rt, "crash_reports", "")
-	want := `{"code":0,"msg":"ok","data":[{"id":"3","device":"Pixel","android_version":"14","app_version":"1.2.3",` +
+	want := `{"code":0,"msg":"ok","data":[{"id":3,"device":"Pixel","android_version":"14","app_version":"1.2.3",` +
 		`"stack":"boom","ip":"1.2.3.4","created_at":"2026-06-01 12:00:00"}]}`
 	if w.Body.String() != want {
 		t.Fatalf("逐字不一致\n got=%s\nwant=%s", w.Body.String(), want)
@@ -432,8 +432,8 @@ func TestHarmReportsList(t *testing.T) {
 	}
 	rt := newMediaRouter(f, nil, "")
 	w := mediaAdminCall(t, rt, "harm_reports", "")
-	want := `{"code":0,"msg":"ok","data":[{"id":"5","app_id":"9","app_name":"某App","content":"被和谐了",` +
-		`"contact":"qq","status":"0","ip":"1.2.3.4","created_at":"2026-06-02 10:00:00"}]}`
+	want := `{"code":0,"msg":"ok","data":[{"id":5,"app_id":9,"app_name":"某App","content":"被和谐了",` +
+		`"contact":"qq","status":0,"ip":"1.2.3.4","created_at":"2026-06-02 10:00:00"}]}`
 	if w.Body.String() != want {
 		t.Fatalf("逐字不一致\n got=%s\nwant=%s", w.Body.String(), want)
 	}

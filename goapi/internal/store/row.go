@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"math"
 )
 
 // Row 是一行查询结果的「列名 → 值」映射，语义等价于 PDO 的 FETCH_ASSOC。
@@ -187,6 +188,32 @@ func scanRow(rows *sql.Rows) (Row, error) {
 			// ParseTime=false，所以 DATETIME/DECIMAL 等也走这里；
 			// 转成 string 后与 PDO 的取值形态一致。
 			row[c] = string(v)
+		case uint64:
+			// BIGINT UNSIGNED 列在 go-sql-driver 里会扫成 uint64（text/binary 协议都一样），
+			// 而本包约定值只有 string/int64/float64/nil；不归一化的话下游 phpInt/phpStr
+			// 都不认识 uint64，会输出 0 或空串（线上 admin_video_usage 的 max_size_id
+			// 曾因此恒为 0）。超出 int64 上界时保持 uint64，宁可不一致也不要静默截断。
+			if v > math.MaxInt64 {
+				row[c] = v
+			} else {
+				row[c] = int64(v)
+			}
+		case uint:
+			row[c] = int64(v)
+		case uint32:
+			row[c] = int64(v)
+		case uint16:
+			row[c] = int64(v)
+		case uint8:
+			row[c] = int64(v)
+		case int32:
+			row[c] = int64(v)
+		case int16:
+			row[c] = int64(v)
+		case int8:
+			row[c] = int64(v)
+		case float32:
+			row[c] = float64(v)
 		default:
 			row[c] = v
 		}

@@ -127,6 +127,35 @@ rollback() {
 }
 
 # ---------- 生成 env 文件 ----------
+# php_upload_max_mb 复刻 api.php:3894 video_server_max_mb()：
+# min(upload_max_filesize, post_max_size) 换算成 MB 向下取整；都取不到时输出 0(=不限)。
+# 注意 ini_get 的值可能与 php.ini 文件当前内容不同（fpm 未重载时仍是旧值），
+# 这里按 fpm 进程的真实取值优先：先问正在跑的 fpm, 问不到才读 php.ini。
+php_upload_max_mb() {
+    local v="" php_bin=""
+    for c in php /www/server/php/*/bin/php; do
+        [ -x "$c" ] && { php_bin="$c"; break; }
+    done
+    if [ -n "$php_bin" ]; then
+        v="$("$php_bin" -r '
+            $a = ini_get("upload_max_filesize"); $b = ini_get("post_max_size");
+            $to = function ($s) { $s = trim((string)$s); if ($s === "" || $s === "-1") return 0;
+                $u = strtolower(substr($s, -1)); $n = (float)$s;
+                if ($u === "g") return (int)round($n * 1073741824);
+                if ($u === "m") return (int)round($n * 1048576);
+                if ($u === "k") return (int)round($n * 1024);
+                return (int)$n; };
+            $x = $to($a); $y = $to($b);
+            if ($x <= 0 && $y <= 0) { echo 0; return; }
+            if ($x <= 0) { echo (int)floor($y / 1048576); return; }
+            if ($y <= 0) { echo (int)floor($x / 1048576); return; }
+            echo (int)floor(min($x, $y) / 1048576);
+        ' 2>/dev/null)"
+    fi
+    case "$v" in ''|*[!0-9]*) v=0 ;; esac
+    printf '%s' "$v"
+}
+
 php_const() { # php_const <file> <CONST_NAME>
   grep -E "define\('$2'" "$1" 2>/dev/null | head -1 | sed -E "s/.*define\('$2',[[:space:]]*'([^']*)'.*/\1/"
 }
@@ -157,6 +186,11 @@ generate_env() {
     # 阶段6 开关: 1 = 未原生的 action 透传给 PHP-FPM(迁移期默认); 0 = 完全不连 fpm。
     # 切换用 --retire-php / --restore-php, 不要手工编辑这一行以外的内容。
     echo "PHP_FALLBACK=1"
+    # 服务器允许的单文件上传上限(MB)。PHP 侧是 ini 的 min(upload_max_filesize, post_max_size);
+    # goapi 读不到 php.ini, 所以在这里落一个数。后台「上传上限」卡片与
+    # admin_video_config_set 的 max_mb 校验都用它; 阶段6 停掉 fpm 后仍应保持原值,
+    # 并且要 <= nginx 的 client_max_body_size(本仓 goapi.conf 里是 150m)。
+    echo "VIDEO_SERVER_MAX_MB=$(env_quote "$(php_upload_max_mb)")"
     echo "DB_SOCKET=$(env_quote "$(mysql_socket)")"
     echo "DB_HOST=$(env_quote "$(php_const "$PHP_CONFIG" DB_HOST)")"
     echo "DB_PORT=$(env_quote "$(php_const "$PHP_CONFIG" DB_PORT)")"

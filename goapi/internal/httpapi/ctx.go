@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -233,6 +234,25 @@ func phpInt(v any) int64 {
 		return int64(x)
 	case int64:
 		return x
+	case uint64:
+		if x > math.MaxInt64 {
+			return math.MaxInt64
+		}
+		return int64(x)
+	case uint:
+		return int64(x)
+	case uint32:
+		return int64(x)
+	case uint16:
+		return int64(x)
+	case uint8:
+		return int64(x)
+	case int32:
+		return int64(x)
+	case int16:
+		return int64(x)
+	case int8:
+		return int64(x)
 	case string:
 		return atoiPrefix(x)
 	}
@@ -320,8 +340,24 @@ func phpStr(v any) string {
 		return strconv.FormatFloat(x, 'g', -1, 64)
 	case int64:
 		return strconv.FormatInt(x, 10)
+	case uint64:
+		return strconv.FormatUint(x, 10)
 	case int:
 		return strconv.Itoa(x)
+	case uint:
+		return strconv.FormatUint(uint64(x), 10)
+	case uint32:
+		return strconv.FormatUint(uint64(x), 10)
+	case uint16:
+		return strconv.FormatUint(uint64(x), 10)
+	case uint8:
+		return strconv.FormatUint(uint64(x), 10)
+	case int32:
+		return strconv.FormatInt(int64(x), 10)
+	case int16:
+		return strconv.FormatInt(int64(x), 10)
+	case int8:
+		return strconv.FormatInt(int64(x), 10)
 	}
 	return ""
 }

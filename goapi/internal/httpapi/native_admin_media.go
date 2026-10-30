@@ -515,12 +515,27 @@ var (
 	harmReportCols  = []string{"id", "app_id", "app_name", "content", "contact", "status", "ip", "created_at"}
 )
 
-// pdoCell 复刻 PDO 模拟预处理取值：非 NULL 一律字符串（store/row.go 顶部注释同结论），
-// NULL 保持 null（TEXT/DATETIME 可空列）。
-func pdoCell(r store.Row, key string) any {
+// crashIntCols / harmIntCols 是这两张表里的整数列（线上 information_schema 实测：
+// crash_reports 只有 id 是 int；harm_reports 的 id/app_id 是 int、status 是 tinyint）。
+//
+// 为什么需要它：PHP 8.1+ 的 mysqlnd 即使 ATTR_EMULATE_PREPARES=true，`query()` 与
+// `prepare()->execute()` 也都返回**原生 integer**（线上 PHP 8.5.6 实测 gettype 全是
+// integer）。而 PDO 只把 DECIMAL/BIT/日期时间等返回成字符串。所以「PDO 一律字符串」
+// 的老假设是错的：整数列必须输出成 JSON 数字，否则 `"id":"78"` 与 PHP 的 `"id":78`
+// 不逐字一致。
+var (
+	crashIntCols = map[string]bool{"id": true}
+	harmIntCols  = map[string]bool{"id": true, "app_id": true, "status": true}
+)
+
+// pdoCell 复刻 PHP 8.x PDO 的取值形态：整数列 → int，其余 → string，NULL → null。
+func pdoCell(r store.Row, key string, isInt bool) any {
 	v, ok := r.Get(key)
 	if !ok || v == nil {
 		return nil
+	}
+	if isInt {
+		return phpInt(v)
 	}
 	return phpStr(v)
 }
@@ -541,7 +556,7 @@ func (rt *Router) handleCrashReports(w http.ResponseWriter, r *http.Request) {
 	for _, row := range rows {
 		o := phpjson.New()
 		for _, col := range crashReportCols {
-			o.Set(col, pdoCell(row, col))
+			o.Set(col, pdoCell(row, col, crashIntCols[col]))
 		}
 		list = append(list, o)
 	}
@@ -564,7 +579,7 @@ func (rt *Router) handleHarmReports(w http.ResponseWriter, r *http.Request) {
 	for _, row := range rows {
 		o := phpjson.New()
 		for _, col := range harmReportCols {
-			o.Set(col, pdoCell(row, col))
+			o.Set(col, pdoCell(row, col, harmIntCols[col]))
 		}
 		list = append(list, o)
 	}
