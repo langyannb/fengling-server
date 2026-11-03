@@ -95,7 +95,9 @@ done
 ## 第 5 步：真机冒烟（重要，别跳）
 
 App 走一遍：首页列表 → 分类 → 详情 → 搜索 → 登录 → 我的 → 私聊列表 → 群聊 → 抽奖页。
-后台（`http://61.184.23.123:9845/admin.html`）走一遍：用户管理 / 应用审核 / 抽奖奖品 / 通知。
+后台（`http://61.184.23.123:9845/`，**不是** `/admin.html` —— 站点根没有这个文件，
+后台前端就是 `index.html` + `assets/index-*.js`，Vue 打包产物）走一遍：
+用户管理 / 应用审核 / 抽奖奖品 / 通知。
 **抽奖的 6 个破坏性操作（重置配额、重置活动、清空奖池、删码、导码、删奖品）先别点**，
 等第 7 步之后再单独验（它们现在也是 Go 原生了，但会真的删数据）。
 
@@ -191,7 +193,7 @@ systemctl start php-fpm-85
 | 2 换二进制 | `goapi` active；`health=200`（证明新二进制在跑） |
 | 3 功能验证 | version/apps/health 全 200，`__probe__` 404 |
 | 4 双跑对比 | PHP_FALLBACK=1 时 35 项（公开 10 + 管理员 17 + 普通用户 6 + 参数化 2）全一致 |
-| 5 真机冒烟 | 由用户侧执行 |
+| 5 真机冒烟 | 线上侧已验证 17 个鉴权 action 全 200、SSE 有 `retry: 2000` 帧、`/ws` 升级 101；App 内的视觉/交互走查由用户侧执行 |
 | 6 关透传 | `PHP_FALLBACK=0` + restart；`__probe__` → `{"code":404,"msg":"未知操作: __probe_x__","data":null}`（Go 自己回） |
 | 6.5 关透传后双跑 | **35/35 全一致**（完全不走 PHP 的情况下与 9101 纯 PHP 逐字相同） |
 | 7 停 fpm | `systemctl stop php-fpm-85` → inactive；`goapi` 仍 active；`/tmp/php-cgi-85.sock` 已消失；70/74/80 未动 |
@@ -240,8 +242,34 @@ notice_get          -> 200  74B
 about_config_get    -> 200  240B
 contributors        -> 200  582B
 stats               -> 401  42B     (该 action 是 require_admin，未带 token 时 401 属正确行为)
-GET /               -> 200
+GET /               -> 200  1520B   后台前端 index.html（标题「风铃分享库 · 管理后台」）
+GET /assets/index-BFJFLmOH.js -> 200  1246811B
+GET /admin.html     -> 404          （站点根没有这个文件，后台入口就是 /）
 ```
 
-回滚：`sed -i 's/^PHP_FALLBACK=.*/PHP_FALLBACK=1/' /etc/fengling/goapi.env` + 恢复
+### 停 fpm 后的鉴权/长连接复验（2026-11-03，端口 9845）
+
+管理员 token（`role='admin'`）11 个接口全 200：
+`admin_users`、`admin_groups`、`admin_social_messages`、`admin_lottery_prizes`、
+`admin_tags`、`crash_reports`、`harm_reports`、`uc_status`、
+`admin_video_config_get`、`admin_video_usage`、`admin_notification_list`。
+
+普通用户 token（`role='user'`）6 个接口全 200：
+`user_me`、`notifications`、`pm_conversations`、`social_groups`、`lottery_info`、`lottery_records`。
+
+长连接：
+
+```
+action=stream&pm_id=0&group_id=0  -> 返回 `retry: 2000` SSE 帧（2 秒截断观察）
+GET /ws (Upgrade: websocket)      -> HTTP 101，WS 升级通
+```
+
+取 token 的命令（`users` 表列名是 **`role`**，没有 `is_admin`）：
+
+```bash
+mysql --socket=/tmp/mysql.sock -uflfxk -p'***' flfxk -N -B \
+  -e "SELECT token FROM users WHERE role='admin' AND token<>'' LIMIT 1"
+```
+
+### 回滚`sed -i 's/^PHP_FALLBACK=.*/PHP_FALLBACK=1/' /etc/fengling/goapi.env` + 恢复
 `/opt/fengling/goapi.bak.20261030-005502` + `systemctl start php-fpm-85`。
