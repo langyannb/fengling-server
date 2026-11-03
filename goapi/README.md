@@ -355,6 +355,27 @@ sudo ./deploy/install.sh --rollback
   不存在会落到 `default` 的业务 action（`comm -23 php-actions.txt go-actions.txt` 为空）。
 - Go 侧的 `case "health"` 是 PHP 没有的 action（监控/探活用），双跑脚本对它只做 Go 侧自检。
 
+### 线上已执行（2026-11-03，`PHP_FALLBACK=0` + `php-fpm-85` 已停）
+
+- `PHP_FALLBACK=0` 下**全量双跑 35/35 逐字一致**（公开 10 + 管理员 17 + 普通用户 6 + 参数化 2），
+  对照端是同一台机上仍在跑的纯 PHP `127.0.0.1:9101`。
+- `systemctl stop php-fpm-85` → `inactive`，`/tmp/php-cgi-85.sock` 消失，`goapi` 仍 `active`；
+  70/74/80 三个实例是别的站点在用，没动。
+- 详细命令、备份时间戳、停 fpm 后的线上基线见 `deploy/PHASE6-RUNBOOK.md` 末尾的「执行记录」。
+
+**两个线上坑（迁移后核对必看）**
+
+1. **访问必须带端口 `9845`**：`flfxk.conf` 是 `listen 9845;`，
+   不带端口的 `curl http://127.0.0.1/api.php` 会命中 nginx 默认 server，
+   返回另一个站点的「极简验证系统」页面（**HTTP 200 但内容毫不相关**，极易误判成 Go 出错）。
+   正确：`curl -s 'http://127.0.0.1:9845/api.php?action=version'`。
+2. **nginx 片段里不能留指向 fpm 的 `error_page` 回退**：线上扩展目录里的 `goapi.conf`
+   曾被手改，多出 `error_page 502 503 504 = @goapi_php_fallback;` + 一个
+   `fastcgi_pass unix:/tmp/php-cgi-85.sock` 的命名 location。fpm 停掉后，
+   goapi 的任何 502 都会被 nginx 改写成「去连已不存在的 socket」，把有意义的错误 JSON
+   变成 nginx 的 502 页面。已用仓库版 `deploy/goapi.conf` 覆盖并 reload。
+   核对：`grep -c goapi_php_fallback <扩展目录>/goapi.conf` 期望 `0`。
+
 ### 切换步骤（服务器）
 
 ```bash
@@ -373,9 +394,9 @@ TOKEN=<管理员 token> ./tools/goapi_diff.sh
 
 # ⑤ 停 PHP-FPM（宝塔面板「软件商店 → PHP-85 → 停止」或 systemctl stop php-fpm-85）
 
-# ⑥ 停完再验一次
-curl -sS 'http://127.0.0.1/api.php?action=version'  # 必须仍 200 + JSON
-curl -sS 'http://127.0.0.1/api.php?action=no_such'  # 必须 404 未知操作（不是 502）
+# ⑥ 停完再验一次（⚠️ 走 nginx 必须带端口 9845，见上文「两个线上坑」）
+curl -sS 'http://127.0.0.1:9845/api.php?action=version'  # 必须仍 200 + JSON
+curl -sS 'http://127.0.0.1:9845/api.php?action=no_such'  # 必须 404 未知操作（不是 502）
 ```
 
 ### 回滚（一分钟回到原样）

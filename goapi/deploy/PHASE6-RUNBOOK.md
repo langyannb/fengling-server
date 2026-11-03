@@ -176,3 +176,72 @@ systemctl start php-fpm-85
 - 服务器上**不要装 Go、不要编译**，二进制只从开发侧/CI 产物来。
 - 停 fpm 前最后确认：`grep -l 'php-cgi-85.sock' /www/server/panel/vhost/nginx/*.conf`
   只应剩 `flfxk.conf`（和可选的 `flfxk-phpref.conf`）。
+
+---
+
+## 执行记录：2026-11-03 线上切换完成（已完成，可作事后核对）
+
+按上面 8 步实际跑完的结果，作为下一个人核对用。
+
+### 结果
+
+| 步骤 | 结果 |
+| --- | --- |
+| 1 备份 | `/opt/fengling/goapi.bak.20261030-005502`、`/etc/fengling/goapi.env.bak.20261030-005502` |
+| 2 换二进制 | `goapi` active；`health=200`（证明新二进制在跑） |
+| 3 功能验证 | version/apps/health 全 200，`__probe__` 404 |
+| 4 双跑对比 | PHP_FALLBACK=1 时 35 项（公开 10 + 管理员 17 + 普通用户 6 + 参数化 2）全一致 |
+| 5 真机冒烟 | 由用户侧执行 |
+| 6 关透传 | `PHP_FALLBACK=0` + restart；`__probe__` → `{"code":404,"msg":"未知操作: __probe_x__","data":null}`（Go 自己回） |
+| 6.5 关透传后双跑 | **35/35 全一致**（完全不走 PHP 的情况下与 9101 纯 PHP 逐字相同） |
+| 7 停 fpm | `systemctl stop php-fpm-85` → inactive；`goapi` 仍 active；`/tmp/php-cgi-85.sock` 已消失；70/74/80 未动 |
+
+### 停掉 fpm 后多出来的两条经验（务必记住）
+
+**1. 访问线上必须带端口 9845。**
+`flfxk.conf` 是 `listen 9845;`，直接 `curl http://127.0.0.1/api.php` 命中的是 nginx 默认 server
+（返回「极简验证系统」页面，HTTP 200 但内容完全无关）。正确写法：
+
+```bash
+curl -s 'http://127.0.0.1:9845/api.php?action=version'
+```
+
+**2. nginx 片段里不能有指向 fpm 的 `error_page` 回退。**
+线上扩展目录里的 `goapi.conf` 曾是手改版，多了一段：
+
+```nginx
+error_page 502 503 504 = @goapi_php_fallback;   # ← 危险
+location @goapi_php_fallback { fastcgi_pass unix:/tmp/php-cgi-85.sock; ... }
+```
+
+fpm 停掉之后，goapi 一旦返回 502 就会被 nginx 改成「502 → 去连已经不存在的 socket」，
+把一个本来有明确错误 JSON 的响应变成 nginx 的 502 页面，排障时会被误导。
+**已用仓库版 `deploy/goapi.conf` 覆盖线上文件**（备份在
+`/www/server/panel/vhost/nginx/extension/flfxk/goapi.conf.bak.20261103-080238`），
+`nginx -t` 通过后 reload，复验 8 个只读 action 全 200、`__probe_x__` 404。
+
+阶段 6 之后 nginx 侧**只应**有仓库版的这段（无 `error_page`、无 `@goapi_php_fallback`），
+核对命令：
+
+```bash
+grep -c 'goapi_php_fallback' /www/server/panel/vhost/nginx/extension/flfxk/goapi.conf   # 期望 0
+```
+
+### 停 fpm 后的线上基线（2026-11-03 08:02，端口 9845）
+
+```
+probe(__probe_x__)  -> HTTP 404  {"code":404,"msg":"未知操作: __probe_x__","data":null}
+version             -> 200  1352B
+apps                -> 200  27606B
+categories          -> 200  2111B
+health              -> 200  117B
+banners             -> 200  838B
+notice_get          -> 200  74B
+about_config_get    -> 200  240B
+contributors        -> 200  582B
+stats               -> 401  42B     (该 action 是 require_admin，未带 token 时 401 属正确行为)
+GET /               -> 200
+```
+
+回滚：`sed -i 's/^PHP_FALLBACK=.*/PHP_FALLBACK=1/' /etc/fengling/goapi.env` + 恢复
+`/opt/fengling/goapi.bak.20261030-005502` + `systemctl start php-fpm-85`。
