@@ -271,5 +271,15 @@ mysql --socket=/tmp/mysql.sock -uflfxk -p'***' flfxk -N -B \
   -e "SELECT token FROM users WHERE role='admin' AND token<>'' LIMIT 1"
 ```
 
-### 回滚`sed -i 's/^PHP_FALLBACK=.*/PHP_FALLBACK=1/' /etc/fengling/goapi.env` + 恢复
-`/opt/fengling/goapi.bak.20261030-005502` + `systemctl start php-fpm-85`。
+### 回滚
+
+```bash
+sed -i 's/^PHP_FALLBACK=.*/PHP_FALLBACK=1/' /etc/fengling/goapi.env
+cd /opt/fengling && cp -a goapi.bak.20261030-005502 goapi
+systemctl restart goapi && sleep 2 && systemctl is-active goapi
+systemctl start php-fpm-85 && systemctl is-active php-fpm-85
+```
+
+注意 `php-fpm-85` 是 **sysv 脚本**（`systemctl is-enabled` 会 redirect 到
+`systemd-sysv-install`），开机自启仍然是 `enabled`，所以重启后它其实会自己起来 ——
+若要长期保持停用，需要 `systemctl disable php-fpm-85` 或改宝塔面板里的自启设置。
