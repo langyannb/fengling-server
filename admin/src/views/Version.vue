@@ -42,9 +42,11 @@
           </div>
           <input ref="apkInput" type="file" accept=".apk" class="hidden-input" @change="onApkChange" />
           <div v-if="uploading" class="up-tip">
-            <span class="up-text">上传中...</span>
+            <!-- 100% 只代表浏览器把字节发完了, 之后服务器还要把文件转存到对象存储,
+                 10MB 约 20 秒、40MB 约 80 秒, 那一段没有进度可报, 仍写「上传中」会像卡死 -->
+            <span class="up-text">{{ uploadPercent >= 100 ? '正在写入存储...' : '上传中...' }}</span>
             <a-progress :percent="uploadPercent / 100" :show-text="false" size="small" />
-            <span class="pct">{{ uploadPercent }}%</span>
+            <span class="pct">{{ uploadPercent >= 100 ? '' : uploadPercent + '%' }}</span>
           </div>
           <div class="tip">仅支持 .apk，单文件不超过 200MB</div>
         </a-form-item>
