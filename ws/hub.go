@@ -237,6 +237,17 @@ func (h *Hub) handleFrame(c *Client, raw []byte) {
 func (h *Hub) forwardSend(c *Client, s SendData) {
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 	defer cancel()
+	// 先查幂等映射: 客户端超时重试时直接返回上一次的消息 id。
+	if existing, err := h.store.LookupClientMsg(ctx, c.userID, s.ClientMsgID); err == nil && existing != nil {
+		c.enqueue(frame("ack", AckData{
+			ClientMsgID: s.ClientMsgID,
+			ID:          existing.MsgID,
+			ConvID:      existing.ConvID,
+			GroupID:     existing.GroupID,
+			CreatedAt:   existing.CreatedAt,
+		}))
+		return
+	}
 	var res map[string]any
 	var err error
 	if s.GroupID > 0 {
@@ -261,6 +272,20 @@ func (h *Hub) forwardSend(c *Client, s SendData) {
 	}
 	if s.GroupID > 0 {
 		ack.GroupID = s.GroupID
+	}
+	if ack.ID > 0 {
+		saveErr := h.store.SaveClientMsg(ctx, c.userID, s.ClientMsgID, ClientMsg{
+			MsgID: ack.ID, ConvID: ack.ConvID, GroupID: ack.GroupID, CreatedAt: ack.CreatedAt,
+		})
+		if saveErr != nil {
+			// 并发重试抢先写入了映射：以已存在的映射为准，避免两个 ack 指向不同消息。
+			if existing, e := h.store.LookupClientMsg(ctx, c.userID, s.ClientMsgID); e == nil && existing != nil {
+				ack.ID = existing.MsgID
+				ack.ConvID = existing.ConvID
+				ack.GroupID = existing.GroupID
+				ack.CreatedAt = existing.CreatedAt
+			}
+		}
 	}
 	log.Printf("send user=%d group=%d pm=%d client=%s ack_id=%d conv=%d",
 		c.userID, s.GroupID, s.ToUser, s.ClientMsgID, ack.ID, ack.ConvID)

@@ -195,3 +195,33 @@ func (s *Store) SetGroupRead(ctx context.Context, userID, groupID int, lastID in
 		 VALUES (?, ?, ?, NOW())`, userID, groupID, lastID)
 	return err
 }
+
+type ClientMsg struct {
+	MsgID     int64
+	ConvID    int
+	GroupID   int
+	CreatedAt string
+}
+
+func (s *Store) LookupClientMsg(ctx context.Context, userID int, clientMsgID string) (*ClientMsg, error) {
+	var m ClientMsg
+	err := s.db.QueryRowContext(ctx,
+		`SELECT msg_id, conv_id, group_id, DATE_FORMAT(created_at,'%Y-%m-%d %H:%i:%s')
+		 FROM ws_client_msgs WHERE user_id = ? AND client_msg_id = ? LIMIT 1`,
+		userID, clientMsgID).Scan(&m.MsgID, &m.ConvID, &m.GroupID, &m.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &m, nil
+}
+
+func (s *Store) SaveClientMsg(ctx context.Context, userID int, clientMsgID string, m ClientMsg) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO ws_client_msgs (user_id, client_msg_id, msg_id, conv_id, group_id)
+		 VALUES (?, ?, ?, ?, ?)`,
+		userID, clientMsgID, m.MsgID, m.ConvID, m.GroupID)
+	return err
+}
