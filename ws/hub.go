@@ -192,6 +192,7 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 		ServerTime:   nowUnix(),
 		HeartbeatSec: heartbeatSec,
 		Cursor:       Cursor{PmID: pmCursor, GroupID: groupCursor},
+		Features:     []string{"send_ack", "read", "typing"},
 	}))
 	go c.writePump()
 	c.readPump()

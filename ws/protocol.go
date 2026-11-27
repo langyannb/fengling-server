@@ -35,10 +35,11 @@ type Cursor struct {
 }
 
 type HelloData struct {
-	UserID       int    `json:"user_id"`
-	ServerTime   int64  `json:"server_time"`
-	HeartbeatSec int    `json:"heartbeat_sec"`
-	Cursor       Cursor `json:"cursor"`
+	UserID       int      `json:"user_id"`
+	ServerTime   int64    `json:"server_time"`
+	HeartbeatSec int      `json:"heartbeat_sec"`
+	Cursor       Cursor   `json:"cursor"`
+	Features     []string `json:"features,omitempty"`
 }
 
 type SendData struct {
