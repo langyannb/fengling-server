@@ -722,6 +722,19 @@ try {
             $me = current_user_or_401();
             if ((int)$me['is_active'] !== 1) json_error('你已被封禁', 403);
             $meId = (int)$me['id'];
+            // WebSocket 重试幂等: 同一个 client_msg_id 直接返回已落库的消息。
+            $clientMsgId = trim((string)param('client_msg_id', ''));
+            if ($clientMsgId !== '') {
+                if (strlen($clientMsgId) > 64) json_error('client_msg_id 过长');
+                if (db_has_column('social_pm_messages', 'client_msg_id')) {
+                    $st = db()->prepare('SELECT id, conv_id, created_at FROM social_pm_messages WHERE from_user = ? AND client_msg_id = ? LIMIT 1');
+                    $st->execute([$meId, $clientMsgId]);
+                    $dup = $st->fetch();
+                    if ($dup) {
+                        json_out(['id' => (int)$dup['id'], 'conv_id' => (int)$dup['conv_id'], 'created_at' => (string)$dup['created_at']]);
+                    }
+                }
+            }
             $toId = (int)param('to_user', 0);
             $cid = (int)param('conv_id', 0);
             if ($toId <= 0 && $cid > 0) {
@@ -778,6 +791,10 @@ try {
                 array_push($pvals, $video, $vidW, $vidH, $vidDur, $vidSize);
             }
             if (db_has_column('social_pm_messages', 'msg_type')) { $pcols[] = 'msg_type'; $pvals[] = $msgType; }
+            if ($clientMsgId !== '' && db_has_column('social_pm_messages', 'client_msg_id')) {
+                $pcols[] = 'client_msg_id';
+                $pvals[] = $clientMsgId;
+            }
             $pcols[] = 'is_recalled';
             $pvals[] = 0;
             db()->prepare('INSERT INTO social_pm_messages (' . implode(', ', $pcols) . ') VALUES ('
@@ -1067,6 +1084,18 @@ try {
             $me = current_user_or_401();
             if ((int)$me['is_active'] !== 1) json_error('你已被封禁', 403);
             $gid = (int)param('group_id', 0);
+            $clientMsgId = trim((string)param('client_msg_id', ''));
+            if ($clientMsgId !== '') {
+                if (strlen($clientMsgId) > 64) json_error('client_msg_id 过长');
+                if (db_has_column('social_messages', 'client_msg_id')) {
+                    $st = db()->prepare('SELECT id, group_id, created_at FROM social_messages WHERE user_id = ? AND client_msg_id = ? LIMIT 1');
+                    $st->execute([(int)$me['id'], $clientMsgId]);
+                    $dup = $st->fetch();
+                    if ($dup) {
+                        json_out(['id' => (int)$dup['id'], 'group_id' => (int)$dup['group_id'], 'created_at' => (string)$dup['created_at']]);
+                    }
+                }
+            }
             $g = social_group_or_404($gid, false);
             // 必须先加入群聊才能发言: 非管理员且不是群成员 -> 403 (放在禁言判定之前, 契约 A2)
             if (($me['role'] ?? '') !== 'admin' && !social_is_member($gid, (int)$me['id'])) {
@@ -1137,6 +1166,10 @@ try {
                 array_push($svals, $video, $vidW, $vidH, $vidDur, $vidSize);
             }
             if (db_has_column('social_messages', 'msg_type')) { $scols[] = 'msg_type'; $svals[] = $msgType; }
+            if ($clientMsgId !== '' && db_has_column('social_messages', 'client_msg_id')) {
+                $scols[] = 'client_msg_id';
+                $svals[] = $clientMsgId;
+            }
             $scols[] = 'is_recalled';
             $svals[] = 0;
             db()->prepare('INSERT INTO social_messages (' . implode(', ', $scols) . ') VALUES ('
