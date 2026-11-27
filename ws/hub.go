@@ -262,6 +262,8 @@ func (h *Hub) forwardSend(c *Client, s SendData) {
 	if s.GroupID > 0 {
 		ack.GroupID = s.GroupID
 	}
+	log.Printf("send user=%d group=%d pm=%d client=%s ack_id=%d conv=%d",
+		c.userID, s.GroupID, s.ToUser, s.ClientMsgID, ack.ID, ack.ConvID)
 	c.enqueue(frame("ack", ack))
 }
 
